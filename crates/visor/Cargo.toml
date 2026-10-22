@@ -1,0 +1,9 @@
+[package]
+name = "visor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.37.0"
+jef = { version = "0.1.0", path = "../jef" }
+rfd = "0.17.2"

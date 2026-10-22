@@ -1,0 +1,4 @@
+# Copia este archivo a .cargo/config.toml (ignorado por git) y ajusta la ruta
+# a una carpeta con archivos .jef reales para las pruebas de ida y vuelta.
+[env]
+JEF_FIXTURES = "/ruta/a/tus/disenos"

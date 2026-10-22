@@ -189,6 +189,14 @@ impl Jef {
         self.stitches.iter().filter(|s| s.kind == kind).count()
     }
 
+    /// Si el diseño, centrado en el origen como lo borda la máquina, cabe en el bastidor.
+    pub fn fits_in(&self, hoop: Hoop) -> bool {
+        let b = self.bounds();
+        hoop.size().is_some_and(|(w, h)| {
+            (-b.min_x).max(b.max_x) * 2 <= w && (-b.min_y).max(b.max_y) * 2 <= h
+        })
+    }
+
     /// Recalcula las extensiones y, si el diseño ya no cabe, el bastidor.
     /// Úsalo después de modificar las puntadas; los conteos los calcula siempre el escritor.
     pub fn refresh_header(&mut self) {
@@ -211,12 +219,8 @@ impl Jef {
             hoop_b,
         ];
 
-        let fits = |h: Hoop| {
-            h.size()
-                .is_some_and(|(w, hh)| left.max(right) * 2 <= w && top.max(bottom) * 2 <= hh)
-        };
-        if !fits(self.header.hoop)
-            && let Some(h) = Hoop::BY_SIZE.into_iter().find(|&h| fits(h))
+        if !self.fits_in(self.header.hoop)
+            && let Some(h) = Hoop::BY_SIZE.into_iter().find(|&h| self.fits_in(h))
         {
             self.header.hoop = h;
         }

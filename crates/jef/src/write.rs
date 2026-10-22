@@ -38,34 +38,42 @@ pub fn write(jef: &Jef) -> Vec<u8> {
 }
 
 /// Codifica las puntadas como desplazamientos relativos, terminando con el fin.
-/// Los movimientos más largos que [`MAX_DELTA`] se parten en tramos iguales.
 fn encode_stitches(jef: &Jef) -> Vec<u8> {
     let mut out = Vec::with_capacity(jef.stitches.len() * 2 + 2);
     let (mut px, mut py) = (0i32, 0i32);
     for s in &jef.stitches {
         let (dx, dy) = (s.x - px, s.y - py);
-        let steps = (dx.abs().max(dy.abs()) + MAX_DELTA - 1) / MAX_DELTA;
-        let mut prev = (0, 0);
-        for k in 1..=steps.max(1) {
-            let cur = (dx * k / steps.max(1), dy * k / steps.max(1));
-            let last = k == steps.max(1);
-            // Un cambio de color lejano se hace saltando primero y cambiando al llegar.
-            let kind = match s.kind {
-                StitchKind::ColorChange if !last => StitchKind::Jump,
-                kind => kind,
-            };
-            match kind {
-                StitchKind::Normal => {}
-                StitchKind::Jump => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_JUMP]),
-                StitchKind::ColorChange => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_COLOR]),
+        match s.kind {
+            // Como en todos los archivos conocidos, el cambio de color va sin desplazamiento:
+            // si el cambio está lejos, primero se salta hasta ahí.
+            StitchKind::ColorChange => {
+                if (dx, dy) != (0, 0) {
+                    push_move(&mut out, StitchKind::Jump, dx, dy);
+                }
+                push_move(&mut out, StitchKind::ColorChange, 0, 0);
             }
-            // y hacia abajo en el modelo, hacia arriba en el archivo.
-            out.push((cur.0 - prev.0) as i8 as u8);
-            out.push((-(cur.1 - prev.1)) as i8 as u8);
-            prev = cur;
+            kind => push_move(&mut out, kind, dx, dy),
         }
         (px, py) = (s.x, s.y);
     }
     out.extend_from_slice(&[CTRL_ESCAPE, CTRL_END]);
     out
+}
+
+/// Escribe un movimiento, partido en tramos iguales si supera [`MAX_DELTA`] en algún eje.
+fn push_move(out: &mut Vec<u8>, kind: StitchKind, dx: i32, dy: i32) {
+    let steps = ((dx.abs().max(dy.abs()) + MAX_DELTA - 1) / MAX_DELTA).max(1);
+    let mut prev = (0, 0);
+    for k in 1..=steps {
+        let cur = (dx * k / steps, dy * k / steps);
+        match kind {
+            StitchKind::Normal => {}
+            StitchKind::Jump => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_JUMP]),
+            StitchKind::ColorChange => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_COLOR]),
+        }
+        // y hacia abajo en el modelo, hacia arriba en el archivo.
+        out.push((cur.0 - prev.0) as i8 as u8);
+        out.push((-(cur.1 - prev.1)) as i8 as u8);
+        prev = cur;
+    }
 }

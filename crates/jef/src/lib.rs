@@ -6,11 +6,13 @@
 //! assert_eq!(jef::write(&design), bytes);
 //! ```
 
+mod edit;
 mod model;
 pub mod palette;
 mod read;
 mod write;
 
+pub use edit::{Block, SAFE_SCALE};
 pub use model::{Bounds, Header, Hoop, Jef, Stitch, StitchKind};
 pub use read::read;
 pub use write::write;
@@ -115,7 +117,7 @@ mod tests {
         );
         let back = read(&write(&jef)).unwrap();
 
-        // Salto de 500 → 4 tramos; cambio de color a 400 de distancia → 3 saltos + el cambio.
+        // Salto de 500 → 4 tramos; cambio de color a 400 de distancia → 4 saltos + el cambio en (0,0).
         assert_eq!(
             back.stitches[3],
             Stitch {
@@ -124,7 +126,7 @@ mod tests {
                 kind: Jump
             }
         );
-        assert_eq!(back.count(Jump), 4 + 3);
+        assert_eq!(back.count(Jump), 4 + 4);
         assert_eq!(back.count(ColorChange), 1);
         assert_eq!(
             back.stitches.last().unwrap(),

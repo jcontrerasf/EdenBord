@@ -166,6 +166,23 @@ mod tests {
     }
 
     #[test]
+    fn new_design_roundtrips() {
+        use StitchKind::*;
+        let s = |x, y, kind| Stitch { x, y, kind };
+        let jef = Jef::new(
+            Hoop::C50x50,
+            vec![1, 10],
+            vec![s(10, 0, Normal), s(10, 0, ColorChange), s(0, 900, Normal)],
+        );
+        assert_eq!(jef.header.hoop, Hoop::B140x200, "no cabía en C");
+        assert_eq!(jef.header.thread_types, vec![DEFAULT_THREAD_TYPE; 2]);
+        let date = &jef.header.datetime[..14];
+        assert!(date.iter().all(u8::is_ascii_digit) && date.starts_with(b"20"));
+        let bytes = write(&jef);
+        assert_eq!(write(&read(&bytes).unwrap()), bytes);
+    }
+
+    #[test]
     fn corrupt_input_errors_instead_of_panicking() {
         use StitchKind::*;
         let good = write(&design(&[(10, 10, Normal), (20, 20, Jump)], vec![1]));

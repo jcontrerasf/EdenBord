@@ -139,6 +139,26 @@ pub struct Jef {
 }
 
 impl Jef {
+    /// Diseño nuevo con la cabecera que escriben los archivos conocidos y la fecha actual.
+    /// `colors` tiene un índice de paleta por bloque (uno más que los cambios de color).
+    pub fn new(hoop: Hoop, colors: Vec<i32>, stitches: Vec<Stitch>) -> Self {
+        let mut jef = Jef {
+            header: Header {
+                flags: 0x0A,
+                datetime: now_ascii(),
+                hoop,
+                extents: [[0; 4]; 5],
+                thread_types: vec![],
+                gap: vec![],
+            },
+            colors,
+            stitches,
+            trailing: vec![],
+        };
+        jef.refresh_header();
+        jef
+    }
+
     /// Rectángulo de todas las posiciones (incluye el origen, donde arranca la aguja).
     pub fn bounds(&self) -> Bounds {
         let mut b = Bounds {
@@ -229,4 +249,31 @@ impl Jef {
             .thread_types
             .resize(self.colors.len(), crate::DEFAULT_THREAD_TYPE);
     }
+}
+
+/// Fecha y hora actual (UTC) como `YYYYMMDDHHMMSS` más 2 bytes en cero.
+fn now_ascii() -> [u8; 16] {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (days, rest) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // Días desde 1970 a fecha civil (algoritmo de Howard Hinnant).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let text = format!(
+        "{year:04}{month:02}{day:02}{:02}{:02}{:02}",
+        rest / 3600,
+        rest / 60 % 60,
+        rest % 60
+    );
+    let mut out = [0; 16];
+    out[..14].copy_from_slice(&text.as_bytes()[..14]);
+    out
 }

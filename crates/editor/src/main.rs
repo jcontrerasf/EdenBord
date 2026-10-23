@@ -1,9 +1,11 @@
-//! Editor de archivos JEF.
+//! Editor de archivos JEF y proyectos de bordado `.bordado`.
 //!
-//! `cargo run -p editor -- [archivo.jef]`
+//! `cargo run -p editor -- [archivo.jef | proyecto.bordado | dibujo.svg]`
 
 mod canvas;
 mod doc;
+mod panel_proyecto;
+mod proyecto;
 
 use std::path::{Path, PathBuf};
 
@@ -11,6 +13,7 @@ use eframe::egui::{self, Color32, Key, Modifiers, Vec2};
 use jef::{Hoop, StitchKind, palette};
 
 use doc::Doc;
+use proyecto::ProyectoDoc;
 
 /// Puntadas por segundo de la simulación a velocidad 1×.
 const PLAY_RATE: f32 = 400.0;
@@ -32,7 +35,7 @@ fn main() -> eframe::Result {
         Box::new(move |_cc| {
             let mut app = Editor::default();
             if let Some(path) = initial {
-                app.open(&path);
+                app.open(Some(&path));
             }
             Ok(Box::new(app))
         }),
@@ -41,18 +44,34 @@ fn main() -> eframe::Result {
 
 /// Acción que espera confirmación del usuario.
 enum Pending {
-    /// Hay cambios sin guardar y se quiere abrir otro archivo.
-    Discard(PathBuf),
+    /// Hay cambios sin guardar y se quiere abrir otro archivo (`None` = proyecto nuevo).
+    Discard(Option<PathBuf>),
     /// "Guardar como" apunta al mismo archivo abierto.
     Overwrite(PathBuf),
 }
 
+/// Una operación de la sección "Transformar", común a JEF y proyectos.
+#[derive(Clone, Copy)]
+enum Op {
+    /// En 0,1 mm.
+    Move(i32, i32),
+    Rotate(f64),
+    MirrorX,
+    MirrorY,
+    Scale(f64),
+    Center,
+}
+
 struct Editor {
+    /// JEF abierto. A lo sumo uno de `doc` y `proyecto` está abierto.
     doc: Option<Doc>,
+    proyecto: Option<ProyectoDoc>,
     message: Option<(String, bool)>,
     pending: Option<Pending>,
-    /// Bloque cuyo color se está eligiendo.
+    /// Bloque (JEF) u objeto (proyecto) cuyo color se está eligiendo.
     picking_color: Option<usize>,
+    /// Última fuente usada para agregar texto.
+    last_font: Option<PathBuf>,
     title: String,
 
     // Vista.
@@ -62,6 +81,7 @@ struct Editor {
     fit_pending: bool,
     show_jumps: bool,
     show_hoop: bool,
+    show_outlines: bool,
     fabric: Color32,
     /// Arrastre de la selección con Shift: resto en 0,1 mm aún no aplicado.
     moving: bool,
@@ -83,15 +103,18 @@ impl Default for Editor {
     fn default() -> Self {
         Self {
             doc: None,
+            proyecto: None,
             message: None,
             pending: None,
             picking_color: None,
+            last_font: None,
             title: String::new(),
             scale: 1.0,
             pan: Vec2::ZERO,
             fit_pending: true,
             show_jumps: false,
             show_hoop: true,
+            show_outlines: false,
             fabric: Color32::from_rgb(196, 190, 178),
             moving: false,
             drag_rest: Vec2::ZERO,
@@ -117,6 +140,37 @@ fn jef_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("Bordado Janome", &["jef", "JEF"])
 }
 
+fn open_dialog() -> rfd::FileDialog {
+    rfd::FileDialog::new()
+        .add_filter(
+            "Bordados, proyectos y vectores",
+            &["jef", "JEF", "bordado", "svg", "SVG"],
+        )
+        .add_filter("Bordado Janome", &["jef", "JEF"])
+        .add_filter("Proyecto de bordado", &["bordado"])
+        .add_filter("Vector SVG", &["svg", "SVG"])
+}
+
+fn extension(path: &Path) -> String {
+    path.extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase()
+}
+
+/// Escribe el JEF y lo relee para confirmar que quedó bien.
+fn write_verified(path: &Path, jef: &jef::Jef) -> Result<(), String> {
+    let bytes = jef::write(jef);
+    std::fs::write(path, &bytes).map_err(|e| e.to_string())?;
+    let back = std::fs::read(path).map_err(|e| e.to_string())?;
+    let again = jef::read(&back).map_err(|e| e.to_string())?;
+    if back == bytes && jef::write(&again) == bytes {
+        Ok(())
+    } else {
+        Err("el archivo releído no coincide".into())
+    }
+}
+
 impl Editor {
     fn info(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), false));
@@ -126,27 +180,87 @@ impl Editor {
         self.message = Some((text.into(), true));
     }
 
-    /// Abre un archivo, pidiendo confirmación si hay cambios sin guardar.
-    fn request_open(&mut self, path: PathBuf) {
-        if self.doc.as_ref().is_some_and(|d| d.dirty) {
+    fn dirty(&self) -> bool {
+        self.doc.as_ref().is_some_and(|d| d.dirty)
+            || self.proyecto.as_ref().is_some_and(|d| d.dirty)
+    }
+
+    /// Abre un archivo (o un proyecto nuevo si `path` es `None`), pidiendo confirmación si
+    /// hay cambios sin guardar.
+    fn request_open(&mut self, path: Option<PathBuf>) {
+        if self.dirty() {
             self.pending = Some(Pending::Discard(path));
         } else {
-            self.open(&path);
+            self.open(path.as_deref());
         }
     }
 
-    fn open(&mut self, path: &Path) {
-        match jef::read_file(path) {
-            Ok(jef) => {
-                self.doc = Some(Doc::new(path.to_path_buf(), jef));
-                self.message = None;
-                self.picking_color = None;
-                self.playing = false;
-                self.progress = usize::MAX;
-                self.fit_pending = true;
-            }
-            Err(e) => self.error(format!("No se pudo abrir {}: {e}", path.display())),
+    /// Abre según la extensión: `.bordado` proyecto, `.svg` proyecto nuevo con sus trazados
+    /// como guías, cualquier otra cosa como JEF.
+    fn open(&mut self, path: Option<&Path>) {
+        let Some(path) = path else {
+            self.set_proyecto(ProyectoDoc::new(
+                None,
+                "proyecto nuevo".into(),
+                bordado::Proyecto::default(),
+            ));
+            return;
+        };
+        let stem = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let result = match extension(path).as_str() {
+            "bordado" => bordado::Proyecto::leer_archivo(path)
+                .map(|p| self.set_proyecto(ProyectoDoc::new(Some(path.into()), stem, p)))
+                .map_err(|e| e.to_string()),
+            "svg" => bordado::svg::importar_archivo(path)
+                .map(|objetos| {
+                    let n = objetos.len();
+                    let proyecto = bordado::Proyecto {
+                        objetos,
+                        ..Default::default()
+                    };
+                    self.set_proyecto(ProyectoDoc::new(None, stem, proyecto));
+                    self.info(format!(
+                        "{n} trazados importados como guías: elige uno y dale un tipo de puntada"
+                    ));
+                })
+                .map_err(|e| e.to_string()),
+            _ => jef::read_file(path)
+                .map(|jef| {
+                    self.reset_view();
+                    self.doc = Some(Doc::new(path.to_path_buf(), jef));
+                    self.proyecto = None;
+                })
+                .map_err(|e| e.to_string()),
+        };
+        if let Err(e) = result {
+            self.error(format!("No se pudo abrir {}: {e}", path.display()));
         }
+    }
+
+    fn set_proyecto(&mut self, doc: ProyectoDoc) {
+        self.reset_view();
+        self.proyecto = Some(doc);
+        self.doc = None;
+    }
+
+    fn reset_view(&mut self) {
+        self.message = None;
+        self.picking_color = None;
+        self.playing = false;
+        self.progress = usize::MAX;
+        self.fit_pending = true;
+    }
+
+    /// El diseño que se dibuja y simula: el JEF abierto o las puntadas del proyecto.
+    fn current_jef(&self) -> Option<&jef::Jef> {
+        self.doc
+            .as_ref()
+            .map(|d| &d.jef)
+            .or(self.proyecto.as_ref().map(|p| &p.generado.jef))
     }
 
     fn add_design(&mut self) {
@@ -191,19 +305,7 @@ impl Editor {
         let Some(doc) = &mut self.doc else {
             return;
         };
-        let bytes = jef::write(&doc.jef);
-        let result = std::fs::write(&path, &bytes)
-            .map_err(|e| e.to_string())
-            .and_then(|()| std::fs::read(&path).map_err(|e| e.to_string()))
-            .and_then(|back| {
-                let again = jef::read(&back).map_err(|e| e.to_string())?;
-                if back == bytes && jef::write(&again) == bytes {
-                    Ok(())
-                } else {
-                    Err("el archivo releído no coincide".into())
-                }
-            });
-        match result {
+        match write_verified(&path, &doc.jef) {
             Ok(()) => {
                 doc.path = path.clone();
                 doc.dirty = false;
@@ -234,32 +336,61 @@ impl Editor {
             .fold((0, 0), |acc, (_, dx, dy)| (acc.0 + dx, acc.1 + dy));
             (undo, redo, save, arrows)
         });
+        let delete = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete));
         if save {
-            self.save_as();
+            if self.proyecto.is_some() {
+                self.save_project(false);
+            } else {
+                self.save_as();
+            }
         }
         let step = (self.step_mm * 10.0).round() as i32;
-        let Some(doc) = &mut self.doc else {
-            return;
-        };
-        if undo {
-            doc.undo();
+        let op = (arrows != (0, 0)).then_some(Op::Move(arrows.0 * step, arrows.1 * step));
+        if let Some(doc) = &mut self.doc {
+            if undo {
+                doc.undo();
+            }
+            if redo {
+                doc.redo();
+            }
+            if let Some(op) = op {
+                apply_jef(doc, op);
+            }
         }
-        if redo {
-            doc.redo();
-        }
-        if arrows != (0, 0) {
-            let sel = doc.selection();
-            doc.edit(|j| j.translate(&sel, arrows.0 * step, arrows.1 * step));
+        if let Some(doc) = &mut self.proyecto {
+            if undo {
+                doc.undo();
+            }
+            if redo {
+                doc.redo();
+            }
+            if let Some(op) = op {
+                apply_proyecto(doc, op);
+            }
+            if delete {
+                doc.remove_selected();
+            }
         }
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("📂 Abrir…").clicked()
-                && let Some(path) = jef_dialog().pick_file()
+                && let Some(path) = open_dialog().pick_file()
             {
-                self.request_open(path);
+                self.request_open(Some(path));
             }
+            if ui.button("🆕 Proyecto nuevo").clicked() {
+                self.request_open(None);
+            }
+        });
+        if self.proyecto.is_some() {
+            self.show_message(ui);
+            ui.separator();
+            self.proyecto_panel(ui);
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
             let has_doc = self.doc.is_some();
             if ui
                 .add_enabled(has_doc, egui::Button::new("💾 Guardar como…"))
@@ -275,18 +406,13 @@ impl Editor {
                 self.add_design();
             }
         });
-        if let Some((text, is_error)) = &self.message {
-            let color = if *is_error {
-                Color32::RED
-            } else {
-                ui.visuals().text_color()
-            };
-            ui.colored_label(color, text);
-        }
+        self.show_message(ui);
         ui.separator();
 
         let Some(doc) = &mut self.doc else {
-            ui.label("Abre un archivo .jef o arrástralo a la ventana.");
+            ui.label(
+                "Abre un .jef, un proyecto .bordado o un dibujo .svg, o arrástralo a la ventana.",
+            );
             return;
         };
 
@@ -308,63 +434,85 @@ impl Editor {
         });
 
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let doc = self.doc.as_mut().unwrap();
             Self::info_section(ui, doc);
             ui.separator();
             Self::hoop_section(ui, doc);
             ui.separator();
             self.picking_color = Self::color_section(ui, doc).or(self.picking_color);
             ui.separator();
-            Self::transform_section(
-                ui,
-                doc,
-                &mut self.step_mm,
-                &mut self.angle,
-                &mut self.scale_pct,
-            );
+            let sel = doc.selection();
+            let label = if sel.is_empty() {
+                "Transformar (todo el diseño)"
+            } else {
+                "Transformar (selección)"
+            };
+            if let Some(op) = self.transform_section(ui, label, true) {
+                apply_jef(self.doc.as_mut().unwrap(), op);
+            }
             ui.separator();
-            ui.collapsing("Vista", |ui| {
-                ui.checkbox(&mut self.show_jumps, "Mostrar saltos");
-                ui.checkbox(&mut self.show_hoop, "Mostrar bastidor");
-                ui.horizontal(|ui| {
-                    ui.label("Tela");
-                    ui.color_edit_button_srgba(&mut self.fabric);
-                });
-                if ui.button("Ajustar a la ventana").clicked() {
-                    self.fit_pending = true;
-                }
+            self.view_sections(ui);
+        });
+    }
+
+    fn show_message(&self, ui: &mut egui::Ui) {
+        if let Some((text, is_error)) = &self.message {
+            let color = if *is_error {
+                Color32::RED
+            } else {
+                ui.visuals().text_color()
+            };
+            ui.colored_label(color, text);
+        }
+    }
+
+    /// Secciones "Vista" y "Simulación", comunes a JEF y proyectos.
+    fn view_sections(&mut self, ui: &mut egui::Ui) {
+        let total = self.current_jef().map_or(0, |j| j.stitches.len());
+        ui.collapsing("Vista", |ui| {
+            ui.checkbox(&mut self.show_jumps, "Mostrar saltos");
+            ui.checkbox(&mut self.show_hoop, "Mostrar bastidor");
+            if self.proyecto.is_some() {
+                ui.checkbox(&mut self.show_outlines, "Mostrar contornos");
+            }
+            ui.horizontal(|ui| {
+                ui.label("Tela");
+                ui.color_edit_button_srgba(&mut self.fabric);
             });
-            ui.collapsing("Simulación", |ui| {
-                // `usize::MAX` = mostrar todo, aunque el diseño crezca al editarlo.
-                let total = doc.jef.stitches.len();
-                let mut shown = self.progress.min(total);
-                ui.horizontal(|ui| {
-                    let label = if self.playing {
-                        "⏸ Pausa"
-                    } else {
-                        "▶ Reproducir"
-                    };
-                    if ui.button(label).clicked() {
-                        if !self.playing && shown >= total {
-                            shown = 0;
-                        }
-                        self.playing = !self.playing;
-                    }
-                    if ui.button("⏮").clicked() {
+            if ui.button("Ajustar a la ventana").clicked() {
+                self.fit_pending = true;
+            }
+        });
+        ui.collapsing("Simulación", |ui| {
+            // `usize::MAX` = mostrar todo, aunque el diseño crezca al editarlo.
+            let mut shown = self.progress.min(total);
+            ui.horizontal(|ui| {
+                let label = if self.playing {
+                    "⏸ Pausa"
+                } else {
+                    "▶ Reproducir"
+                };
+                if ui.button(label).clicked() {
+                    if !self.playing && shown >= total {
                         shown = 0;
                     }
-                    if ui.button("⏭").clicked() {
-                        shown = total;
-                        self.playing = false;
-                    }
-                });
-                ui.add(egui::Slider::new(&mut shown, 0..=total).text("puntada"));
-                self.progress = if shown >= total { usize::MAX } else { shown };
-                ui.add(
-                    egui::Slider::new(&mut self.speed, 0.25..=20.0)
-                        .logarithmic(true)
-                        .text("velocidad"),
-                );
+                    self.playing = !self.playing;
+                }
+                if ui.button("⏮").clicked() {
+                    shown = 0;
+                }
+                if ui.button("⏭").clicked() {
+                    shown = total;
+                    self.playing = false;
+                }
             });
+            ui.add(egui::Slider::new(&mut shown, 0..=total).text("puntada"));
+            self.progress = if shown >= total { usize::MAX } else { shown };
+            ui.add(
+                egui::Slider::new(&mut self.speed, 0.25..=20.0)
+                    .logarithmic(true)
+                    .text("velocidad"),
+            );
         });
     }
 
@@ -502,29 +650,26 @@ impl Editor {
         pick
     }
 
+    /// Controles de mover, girar, espejar, escalar y centrar. `warn_scale`: avisar fuera de
+    /// [`jef::SAFE_SCALE`] (en los proyectos no hace falta: se regenera la densidad).
     fn transform_section(
+        &mut self,
         ui: &mut egui::Ui,
-        doc: &mut Doc,
-        step_mm: &mut f32,
-        angle: &mut f64,
-        scale_pct: &mut f64,
-    ) {
-        let sel = doc.selection();
-        ui.strong(if sel.is_empty() {
-            "Transformar (todo el diseño)"
-        } else {
-            "Transformar (selección)"
-        });
-        let step = (*step_mm * 10.0).round() as i32;
+        label: &str,
+        warn_scale: bool,
+    ) -> Option<Op> {
+        let mut op = None;
+        ui.strong(label);
+        let step = (self.step_mm * 10.0).round() as i32;
         ui.horizontal(|ui| {
             ui.label("Mover");
             for (label, dx, dy) in [("←", -1, 0), ("↑", 0, -1), ("↓", 0, 1), ("→", 1, 0)] {
                 if ui.button(label).clicked() {
-                    doc.edit(|j| j.translate(&sel, dx * step, dy * step));
+                    op = Some(Op::Move(dx * step, dy * step));
                 }
             }
             ui.add(
-                egui::DragValue::new(step_mm)
+                egui::DragValue::new(&mut self.step_mm)
                     .range(0.1..=50.0)
                     .speed(0.1)
                     .suffix(" mm"),
@@ -533,60 +678,78 @@ impl Editor {
         ui.small("También: flechas del teclado, o Shift + arrastrar en el lienzo");
         ui.horizontal(|ui| {
             if ui.button("⟲ 90°").clicked() {
-                doc.edit(|j| j.rotate(&sel, -90.0));
+                op = Some(Op::Rotate(-90.0));
             }
             if ui.button("⟳ 90°").clicked() {
-                doc.edit(|j| j.rotate(&sel, 90.0));
+                op = Some(Op::Rotate(90.0));
             }
             if ui.button("⇆ Espejo").clicked() {
-                doc.edit(|j| j.mirror_x(&sel));
+                op = Some(Op::MirrorX);
             }
             if ui.button("⇅ Espejo").clicked() {
-                doc.edit(|j| j.mirror_y(&sel));
+                op = Some(Op::MirrorY);
             }
         });
         ui.horizontal(|ui| {
             ui.add(
-                egui::DragValue::new(angle)
+                egui::DragValue::new(&mut self.angle)
                     .range(-180.0..=180.0)
                     .speed(1.0)
                     .suffix("°"),
             );
             if ui.button("Rotar").clicked() {
-                doc.edit(|j| j.rotate(&sel, *angle));
+                op = Some(Op::Rotate(self.angle));
             }
         });
         ui.horizontal(|ui| {
             ui.add(
-                egui::DragValue::new(scale_pct)
+                egui::DragValue::new(&mut self.scale_pct)
                     .range(10.0..=500.0)
                     .speed(1.0)
                     .suffix(" %"),
             );
             if ui.button("Escalar").clicked() {
-                doc.edit(|j| j.scale(&sel, *scale_pct / 100.0));
+                op = Some(Op::Scale(self.scale_pct / 100.0));
             }
         });
-        if !jef::SAFE_SCALE.contains(&(*scale_pct / 100.0)) {
+        if warn_scale && !jef::SAFE_SCALE.contains(&(self.scale_pct / 100.0)) {
             ui.colored_label(
                 Color32::from_rgb(200, 120, 0),
                 "⚠ Fuera de 80–120 % la densidad del relleno cambia mucho",
             );
         }
         if ui.button("⌖ Centrar en el bastidor").clicked() {
-            doc.edit(|j| j.center_on_hoop(&sel));
+            op = Some(Op::Center);
         }
+        op
     }
 
     /// Ventana para elegir un hilo de la paleta Janome.
     fn color_picker(&mut self, ctx: &egui::Context) {
-        let (Some(block), Some(doc)) = (self.picking_color, &mut self.doc) else {
+        let Some(target) = self.picking_color else {
             return;
         };
-        let current = doc.jef.colors.get(block).copied().unwrap_or(0);
+        let (title, current) = if let Some(doc) = &self.doc {
+            (
+                format!("Color del bloque {}", target + 1),
+                doc.jef.colors.get(target).copied(),
+            )
+        } else if let Some(doc) = &self.proyecto {
+            let obj = doc.proyecto.objetos.get(target);
+            (
+                format!("Color de «{}»", obj.map_or("", |o| o.nombre.as_str())),
+                obj.map(|o| o.color),
+            )
+        } else {
+            (String::new(), None)
+        };
+        let Some(current) = current else {
+            self.picking_color = None;
+            return;
+        };
         let mut open = true;
         let mut chosen = None;
-        egui::Window::new(format!("Color del bloque {}", block + 1))
+        egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -614,7 +777,12 @@ impl Editor {
             });
         if let Some(c) = chosen {
             if c != current {
-                doc.edit(|j| j.set_color(block, c));
+                if let Some(doc) = &mut self.doc {
+                    doc.edit(|j| j.set_color(target, c));
+                }
+                if let Some(doc) = &mut self.proyecto {
+                    doc.edit(|p| p.objetos[target].color = c);
+                }
             }
             open = false;
         }
@@ -659,7 +827,7 @@ impl Editor {
             let pending = self.pending.take();
             if yes {
                 match pending {
-                    Some(Pending::Discard(path)) => self.open(&path),
+                    Some(Pending::Discard(path)) => self.open(path.as_deref()),
                     Some(Pending::Overwrite(path)) => self.write_to(path),
                     None => {}
                 }
@@ -668,11 +836,15 @@ impl Editor {
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {
-        let title = match &self.doc {
-            Some(doc) => format!(
-                "{}{} — Editor JEF",
-                if doc.dirty { "• " } else { "" },
-                file_name(&doc.path)
+        let name = match (&self.doc, &self.proyecto) {
+            (Some(doc), _) => Some(file_name(&doc.path)),
+            (_, Some(doc)) => Some(doc.path.as_deref().map_or(doc.nombre.clone(), file_name)),
+            _ => None,
+        };
+        let title = match name {
+            Some(name) => format!(
+                "{}{name} — Editor JEF",
+                if self.dirty() { "• " } else { "" },
             ),
             None => "Editor JEF".into(),
         };
@@ -687,16 +859,16 @@ impl eframe::App for Editor {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
         if let Some(path) = dropped {
-            self.request_open(path);
+            self.request_open(Some(path));
         }
         if self.pending.is_none() {
             self.shortcuts(ctx);
         }
 
         if self.playing
-            && let Some(doc) = &self.doc
+            && let Some(jef) = self.current_jef()
         {
-            let total = doc.jef.stitches.len();
+            let total = jef.stitches.len();
             self.play_accum += ctx.input(|i| i.stable_dt) * PLAY_RATE * self.speed;
             let step = self.play_accum as usize;
             self.play_accum -= step as f32;
@@ -722,4 +894,34 @@ impl eframe::App for Editor {
         self.color_picker(&ctx);
         self.confirm_dialog(&ctx);
     }
+}
+
+fn apply_jef(doc: &mut Doc, op: Op) {
+    let sel = doc.selection();
+    doc.edit(|j| match op {
+        Op::Move(dx, dy) => j.translate(&sel, dx, dy),
+        Op::Rotate(deg) => j.rotate(&sel, deg),
+        Op::MirrorX => j.mirror_x(&sel),
+        Op::MirrorY => j.mirror_y(&sel),
+        Op::Scale(f) => j.scale(&sel, f),
+        Op::Center => j.center_on_hoop(&sel),
+    });
+}
+
+fn apply_proyecto(doc: &mut ProyectoDoc, op: Op) {
+    use kurbo::{Affine, Point, Vec2};
+    let sel = doc.selection();
+    doc.transform(&sel, |r| {
+        let c = r.center();
+        let about =
+            |t: Affine| Affine::translate(c.to_vec2()) * t * Affine::translate(-c.to_vec2());
+        match op {
+            Op::Move(dx, dy) => Affine::translate(Vec2::new(f64::from(dx), f64::from(dy)) / 10.0),
+            Op::Rotate(deg) => Affine::rotate_about(deg.to_radians(), c),
+            Op::MirrorX => about(Affine::FLIP_X),
+            Op::MirrorY => about(Affine::FLIP_Y),
+            Op::Scale(f) => Affine::scale_about(f, c),
+            Op::Center => Affine::translate(Point::ZERO - c),
+        }
+    });
 }

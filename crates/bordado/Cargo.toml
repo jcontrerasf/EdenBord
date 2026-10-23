@@ -1,0 +1,13 @@
+[package]
+name = "bordado"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jef = { version = "0.1.0", path = "../jef" }
+kurbo = "0.13"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2"
+ttf-parser = "0.25"
+usvg = "0.48.1"

@@ -12,7 +12,9 @@ pub mod texto;
 
 use kurbo::{Affine, BezPath, Point};
 
-pub use proyecto::{FORMATO, Forma, Objeto, PRESETS, Proyecto, ProyectoError, Puntada, VERSION};
+pub use proyecto::{
+    FORMATO, Fondo, Forma, Objeto, PRESETS, Proyecto, ProyectoError, Puntada, VERSION,
+};
 
 use geom::{Polilinea, polilineas};
 use jef::{Hoop, Jef, Stitch, StitchKind};

@@ -19,8 +19,26 @@ pub struct Proyecto {
     pub version: u32,
     /// Código de bastidor JEF (ver [`jef::Hoop::code`]).
     pub bastidor: i32,
+    /// Imagen para calcar; no se borda.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fondo: Option<Fondo>,
     /// Objetos en orden de bordado.
     pub objetos: Vec<Objeto>,
+}
+
+/// Imagen de referencia bajo el diseño.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fondo {
+    /// Ruta de la imagen; si es relativa, se toma desde la carpeta del proyecto.
+    pub ruta: PathBuf,
+    /// Centro de la imagen, en mm.
+    pub centro: [f64; 2],
+    /// Ancho en mm; el alto sale de la proporción de la imagen.
+    pub ancho: f64,
+    /// 0 = invisible, 1 = opaca.
+    pub opacidad: f32,
+    #[serde(default = "si")]
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +211,7 @@ impl Default for Proyecto {
             formato: FORMATO.into(),
             version: VERSION,
             bastidor: jef::Hoop::A110x110.code(),
+            fondo: None,
             objetos: vec![],
         }
     }
@@ -304,6 +323,15 @@ mod tests {
                 afin: Affine::translate((1.0, 2.0)).as_coeffs(),
             },
             puntada: Puntada::Ninguna,
+        });
+        let text = p.guardar();
+        assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
+        p.fondo = Some(Fondo {
+            ruta: "foto.png".into(),
+            centro: [1.5, -2.0],
+            ancho: 80.0,
+            opacidad: 0.5,
+            visible: true,
         });
         let text = p.guardar();
         assert!(text.contains("\"d\": \"M0,0 L10.5,0 L10.5,-3.25 Q5,2 0,0 Z\""));

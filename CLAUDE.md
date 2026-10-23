@@ -105,6 +105,8 @@ bastidor. El orden de `objetos` es el orden de bordado.
   por fila. La base es el mismo relleno a +90°, ralo y metido 0,5 mm.
 - `svg.rs`: usvg (transforms, unidades, textos con fuentes del sistema) → objetos guía,
   color = `palette::nearest`, centrados en el origen. 96 px por pulgada.
+- `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible}`.
+  Imagen para calcar; no se borda. Ruta relativa = desde la carpeta del `.bordado`.
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
 ## Editor (`crates/editor/src`)
@@ -120,6 +122,18 @@ bastidor. El orden de `objetos` es el orden de bordado.
 - `proyecto.rs`: `ProyectoDoc` = proyecto + selección + historial (copias del `Proyecto`) +
   puntadas generadas y polilíneas en caché (se recalculan en `sync()` tras cada edición).
   `edit_grouped(clave, …)` junta en un solo deshacer las ediciones continuas (arrastrar valores).
+- `pluma.rs` + `Editor.tool` (`Select`/`Pen`): clic = vértice esquina, arrastrar = vértice con
+  manija (simétrica, control = punto + manija), clic en el primero = zona, Enter = línea,
+  Retroceso/Esc. Con la pluma el arrastre principal no mueve la vista (rueda/botón central sí).
+  Los trazos nuevos entran como guías. "Combinar zonas" (`ProyectoDoc::combine`) une contornos
+  en uno: los de adentro quedan como agujeros.
+- Barra sobre el lienzo (`canvas.rs::toolbar`): herramienta (`Tool::Select/Pen/Ruler`),
+  cuadrícula y posición del puntero en mm. `tool_drags()`: con pluma o regla el arrastre
+  principal es de la herramienta, no mueve vista ni selección.
+- Cuadrícula (`draw_grid`): alineada al origen, paso adaptativo 1/5/10/50/100 mm (≥ 8 px),
+  líneas fuertes cada 10 mm (o 5 pasos), ejes más oscuros. Regla: `Editor.ruler` (mm),
+  Shift = múltiplos de 45° (`snap45`), Esc borra; sirve en JEF y proyectos.
+- Fondo: textura en `Editor.fondo_tex` (crate `image`), recargada en `logic` si cambia la ruta.
 - `panel_proyecto.rs`: guardar `.bordado` (relee y compara), exportar JEF (`write_verified`),
   importar SVG, agregar texto, lista de objetos, propiedades/puntada. Transformar usa el mismo
   `Op` que los JEF (`apply_jef` / `apply_proyecto`); en proyectos escalar re-densifica solo.
@@ -137,11 +151,10 @@ Hecho: lectura/escritura, visor, edición básica (mover, rotar, espejar, escala
 recolorear, reordenar, borrar, combinar, deshacer, guardar como). Proyectos `.bordado`:
 importar SVG, convertir trazados en relleno/satín/pespunte, texto TTF, exportar JEF.
 
-Próximo paso planeado: imagen de fondo para calcar (campo nuevo en `Proyecto`, con
-`#[serde(default)]`) + herramienta pluma (clic = vértice, arrastre = curva) que crea objetos
-`contorno`/`linea`.
+Calcar: imagen de fondo + pluma + combinar zonas.
 
 Ideas pendientes:
+- Editar nodos de un trazo ya creado (hoy solo se redibuja); mover/escalar el fondo con el ratón.
 - `.ai` directo (leyendo su parte PDF).
 - Satín automático en formas cerradas y letras (hoy el satín es de ancho fijo sobre el trazado).
 - Kerning en textos; marcar cortes de hilo (hoy solo saltos).

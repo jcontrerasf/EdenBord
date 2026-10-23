@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 
-use bordado::{Forma, Objeto, PRESETS, Proyecto, Puntada};
+use bordado::{Fondo, Forma, Objeto, PRESETS, Proyecto, Puntada};
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
 use kurbo::{Affine, Point, Shape};
 
-use crate::{Editor, file_name, write_verified};
+use crate::{Editor, Tool, file_name, write_verified};
 
 const WARNING: Color32 = Color32::from_rgb(200, 120, 0);
 
@@ -82,6 +82,9 @@ impl Editor {
             let doc = self.proyecto.as_mut().unwrap();
             info_section(ui, doc);
             ui.separator();
+            self.trace_section(ui);
+            ui.separator();
+            let doc = self.proyecto.as_mut().unwrap();
             if let Some(i) = objects_section(ui, doc) {
                 self.picking_color = Some(i);
             }
@@ -103,6 +106,179 @@ impl Editor {
             ui.separator();
             self.view_sections(ui);
         });
+    }
+
+    /// Sección "Calcar": imagen de fondo y herramienta pluma.
+    fn trace_section(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Calcar");
+        if self.tool != Tool::Pen {
+            ui.small("Elige ✒ Pluma en la barra del lienzo para dibujar contornos.");
+        } else {
+            ui.small(
+                "Clic: vértice en esquina · arrastrar: vértice con curva · clic en el primero: \
+                 cerrar zona · Enter: terminar línea · Retroceso: borrar vértice · Esc: cancelar \
+                 · rueda o botón central: mover la vista",
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.pen.cerrable(), egui::Button::new("Cerrar zona"))
+                    .clicked()
+                {
+                    self.finish_pen(true);
+                }
+                if ui
+                    .add_enabled(
+                        self.pen.nodos.len() >= 2,
+                        egui::Button::new("Terminar línea"),
+                    )
+                    .clicked()
+                {
+                    self.finish_pen(false);
+                }
+                if ui
+                    .add_enabled(!self.pen.nodos.is_empty(), egui::Button::new("Cancelar"))
+                    .clicked()
+                {
+                    self.pen = Default::default();
+                }
+            });
+        }
+        let doc = self.proyecto.as_mut().unwrap();
+        if doc.selection().len() > 1
+            && ui
+                .button("⧉ Combinar zonas")
+                .on_hover_text(
+                    "Une los contornos seleccionados; los interiores quedan como agujeros",
+                )
+                .clicked()
+            && !doc.combine()
+        {
+            self.error("Selecciona al menos dos contornos para combinar");
+        }
+
+        let doc = self.proyecto.as_mut().unwrap();
+        let mut pick = false;
+        ui.horizontal(|ui| {
+            ui.label("Imagen de fondo");
+            pick = ui.button("Elegir…").clicked();
+            if doc.proyecto.fondo.is_some() && ui.button("Quitar").clicked() {
+                doc.edit(|p| p.fondo = None);
+            }
+        });
+        if let Some(fondo) = &doc.proyecto.fondo {
+            let mut f = fondo.clone();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut f.visible, "Ver");
+                ui.add(egui::Slider::new(&mut f.opacidad, 0.05..=1.0).text("opacidad"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Ancho");
+                ui.add(
+                    egui::DragValue::new(&mut f.ancho)
+                        .range(5.0..=500.0)
+                        .speed(0.2)
+                        .suffix(" mm"),
+                );
+                ui.label("Centro");
+                ui.add(
+                    egui::DragValue::new(&mut f.centro[0])
+                        .speed(0.2)
+                        .suffix(" mm"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut f.centro[1])
+                        .speed(0.2)
+                        .suffix(" mm"),
+                );
+            });
+            ui.small("El fondo no se borda ni se exporta.");
+            if &f != fondo {
+                doc.edit_grouped("fondo".into(), |p| p.fondo = Some(f));
+            }
+        }
+        if pick {
+            self.pick_fondo();
+        }
+    }
+
+    fn pick_fondo(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "Imagen",
+                &["png", "jpg", "jpeg", "webp", "bmp", "PNG", "JPG", "JPEG"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        let Some(doc) = &mut self.proyecto else {
+            return;
+        };
+        // Ancho inicial: el del bastidor, para empezar con algo del tamaño del diseño.
+        let ancho = jef::Hoop::from_code(doc.proyecto.bastidor)
+            .size()
+            .map_or(100.0, |(w, _)| f64::from(w) / 10.0);
+        doc.edit(|p| {
+            p.fondo = Some(Fondo {
+                ruta: path,
+                centro: [0.0, 0.0],
+                ancho,
+                opacidad: 0.6,
+                visible: true,
+            });
+        });
+        self.fit_pending = true;
+    }
+
+    /// Carga la textura del fondo si cambió la imagen.
+    pub(crate) fn load_fondo(&mut self, ctx: &egui::Context) {
+        let path = self.proyecto.as_ref().and_then(|d| d.fondo_path());
+        let Some(path) = path else {
+            self.fondo_tex = None;
+            return;
+        };
+        if self.fondo_tex.as_ref().is_some_and(|(p, _)| *p == path) {
+            return;
+        }
+        let tex = image::open(&path).map(|img| {
+            let rgba = img.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+            ctx.load_texture("fondo", color, egui::TextureOptions::LINEAR)
+        });
+        match tex {
+            Ok(t) => self.fondo_tex = Some((path, Some(t))),
+            Err(e) => {
+                self.error(format!("No se pudo leer la imagen {}: {e}", path.display()));
+                self.fondo_tex = Some((path, None));
+            }
+        }
+    }
+
+    /// Convierte el trazo de la pluma en un objeto guía (zona si `cerrar`, si no línea).
+    pub(crate) fn finish_pen(&mut self, cerrar: bool) {
+        let Some(doc) = &mut self.proyecto else {
+            return;
+        };
+        let cerrar = cerrar && self.pen.cerrable();
+        if !cerrar && self.pen.nodos.len() < 2 {
+            return;
+        }
+        let d = self.pen.trazado(cerrar);
+        let n = doc.proyecto.objetos.len() + 1;
+        let (nombre, forma) = if cerrar {
+            (format!("zona {n}"), Forma::Contorno { d })
+        } else {
+            (format!("línea {n}"), Forma::Linea { d })
+        };
+        doc.add(vec![Objeto {
+            nombre,
+            visible: true,
+            color: 1,
+            forma,
+            puntada: Puntada::Ninguna,
+        }]);
+        self.pen = Default::default();
     }
 
     /// Guarda el `.bordado`; con `ask` (o si nunca se guardó) pregunta dónde.

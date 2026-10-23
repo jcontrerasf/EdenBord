@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use bordado::geom::{Polilinea, polilineas};
-use bordado::{Generado, Objeto, Proyecto};
+use bordado::{Forma, Generado, Objeto, Proyecto};
 use jef::Bounds;
 use kurbo::{Affine, Point, Rect, Vec2};
 
@@ -232,6 +232,53 @@ impl ProyectoDoc {
         }
     }
 
+    /// Ruta de la imagen de fondo; las relativas se toman desde la carpeta del proyecto.
+    pub fn fondo_path(&self) -> Option<PathBuf> {
+        let ruta = &self.proyecto.fondo.as_ref()?.ruta;
+        Some(match self.path.as_deref().and_then(|p| p.parent()) {
+            Some(dir) if ruta.is_relative() => dir.join(ruta),
+            _ => ruta.clone(),
+        })
+    }
+
+    /// Une los contornos seleccionados en uno solo (los de adentro quedan como agujeros).
+    /// El resultado toma el lugar y las propiedades del primero. Devuelve si combinó.
+    pub fn combine(&mut self) -> bool {
+        let sel: Vec<usize> = self
+            .selection()
+            .into_iter()
+            .filter(|&i| matches!(self.proyecto.objetos[i].forma, Forma::Contorno { .. }))
+            .collect();
+        let [first, rest @ ..] = sel.as_slice() else {
+            return false;
+        };
+        if rest.is_empty() {
+            return false;
+        }
+        let (first, rest) = (*first, rest.to_vec());
+        self.edit(|p| {
+            let mut extra = Vec::new();
+            for &i in &rest {
+                if let Forma::Contorno { d } = &p.objetos[i].forma {
+                    extra.extend(d.elements().iter().copied());
+                }
+            }
+            if let Forma::Contorno { d } = &mut p.objetos[first].forma {
+                for el in extra {
+                    d.push(el);
+                }
+            }
+            let mut i = 0;
+            p.objetos.retain(|_| {
+                i += 1;
+                !rest.contains(&(i - 1))
+            });
+        });
+        self.seleccion = vec![false; self.proyecto.objetos.len()];
+        self.seleccion[first] = true;
+        true
+    }
+
     /// Borra los objetos seleccionados (si no hay selección, no borra nada).
     pub fn remove_selected(&mut self) {
         let sel = self.selection();
@@ -283,7 +330,7 @@ fn inside_even_odd(pls: &[Polilinea], p: Point) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bordado::{Forma, PRESETS, Puntada};
+    use bordado::{PRESETS, Puntada};
     use kurbo::BezPath;
 
     fn doc() -> ProyectoDoc {
@@ -344,5 +391,19 @@ mod tests {
         d.remove(0);
         assert_eq!(d.proyecto.objetos.len(), 2);
         assert!(d.selection().is_empty());
+    }
+
+    #[test]
+    fn combine_makes_holes() {
+        let mut d = doc();
+        // El cuadrado chico (objeto 1) pasa a ser agujero... dentro del agujero: vuelve a ser zona.
+        d.seleccion.fill(true);
+        assert!(d.combine());
+        assert_eq!(d.proyecto.objetos.len(), 1);
+        assert_eq!(d.selection(), vec![0]);
+        assert_eq!(d.object_at(Point::new(17.0, 17.0), 0.1), None);
+        assert_eq!(d.object_at(Point::new(13.0, 13.0), 0.1), Some(0));
+        d.seleccion.fill(true);
+        assert!(!d.combine(), "uno solo no se combina");
     }
 }

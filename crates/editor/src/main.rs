@@ -5,6 +5,7 @@
 mod canvas;
 mod doc;
 mod panel_proyecto;
+mod pluma;
 mod proyecto;
 
 use std::path::{Path, PathBuf};
@@ -62,6 +63,16 @@ enum Op {
     Center,
 }
 
+/// Qué hace el clic en el lienzo de un proyecto.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    Select,
+    /// Calcar: clic agrega vértices, arrastrar los curva.
+    Pen,
+    /// Medir: arrastrar de un punto a otro.
+    Ruler,
+}
+
 struct Editor {
     /// JEF abierto. A lo sumo uno de `doc` y `proyecto` está abierto.
     doc: Option<Doc>,
@@ -72,6 +83,14 @@ struct Editor {
     picking_color: Option<usize>,
     /// Última fuente usada para agregar texto.
     last_font: Option<PathBuf>,
+    tool: Tool,
+    pen: pluma::Pluma,
+    /// Medida de la regla: inicio y fin en mm.
+    ruler: Option<(kurbo::Point, kurbo::Point)>,
+    /// Posición del puntero sobre el lienzo, en mm (para la barra de herramientas).
+    pointer_mm: Option<kurbo::Point>,
+    /// Imagen de fondo cargada: ruta y textura (`None` si no se pudo leer, para no reintentar).
+    fondo_tex: Option<(PathBuf, Option<egui::TextureHandle>)>,
     title: String,
 
     // Vista.
@@ -81,6 +100,7 @@ struct Editor {
     fit_pending: bool,
     show_jumps: bool,
     show_hoop: bool,
+    show_grid: bool,
     show_outlines: bool,
     fabric: Color32,
     /// Arrastre de la selección con Shift: resto en 0,1 mm aún no aplicado.
@@ -108,12 +128,18 @@ impl Default for Editor {
             pending: None,
             picking_color: None,
             last_font: None,
+            tool: Tool::Select,
+            pen: pluma::Pluma::default(),
+            ruler: None,
+            pointer_mm: None,
+            fondo_tex: None,
             title: String::new(),
             scale: 1.0,
             pan: Vec2::ZERO,
             fit_pending: true,
             show_jumps: false,
             show_hoop: true,
+            show_grid: true,
             show_outlines: false,
             fabric: Color32::from_rgb(196, 190, 178),
             moving: false,
@@ -249,6 +275,9 @@ impl Editor {
 
     fn reset_view(&mut self) {
         self.message = None;
+        self.pen = pluma::Pluma::default();
+        self.ruler = None;
+        self.tool = Tool::Select;
         self.picking_color = None;
         self.playing = false;
         self.progress = usize::MAX;
@@ -336,6 +365,27 @@ impl Editor {
             .fold((0, 0), |acc, (_, dx, dy)| (acc.0 + dx, acc.1 + dy));
             (undo, redo, save, arrows)
         });
+        if self.tool == Tool::Pen && !self.pen.nodos.is_empty() {
+            let (enter, escape, back) = ctx.input_mut(|i| {
+                (
+                    i.consume_key(Modifiers::NONE, Key::Enter),
+                    i.consume_key(Modifiers::NONE, Key::Escape),
+                    i.consume_key(Modifiers::NONE, Key::Backspace),
+                )
+            });
+            if enter {
+                self.finish_pen(false);
+            }
+            if escape {
+                self.pen = pluma::Pluma::default();
+            }
+            if back {
+                self.pen.nodos.pop();
+            }
+        }
+        if self.ruler.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.ruler = None;
+        }
         let delete = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete));
         if save {
             if self.proyecto.is_some() {
@@ -472,6 +522,7 @@ impl Editor {
         ui.collapsing("Vista", |ui| {
             ui.checkbox(&mut self.show_jumps, "Mostrar saltos");
             ui.checkbox(&mut self.show_hoop, "Mostrar bastidor");
+            ui.checkbox(&mut self.show_grid, "Cuadrícula en mm");
             if self.proyecto.is_some() {
                 ui.checkbox(&mut self.show_outlines, "Mostrar contornos");
             }
@@ -880,6 +931,7 @@ impl eframe::App for Editor {
             ctx.request_repaint();
         }
         self.update_title(ctx);
+        self.load_fondo(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

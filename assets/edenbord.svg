@@ -23,7 +23,6 @@
     <!-- Tallos -->
     <g stroke="#2f5a2a" stroke-width="9" stroke-linecap="round" fill="none">
       <path d="M150 360 Q160 300 150 250"/>
-      <path d="M260 400 Q250 320 262 220"/>
       <path d="M365 365 Q355 310 370 265"/>
     </g>
     <!-- Flor azul -->
@@ -32,10 +31,13 @@
       <circle cx="132" cy="276" r="22"/><circle cx="168" cy="276" r="22"/>
     </g>
     <circle cx="150" cy="254" r="15" fill="#f4c430"/>
-    <!-- Copihue rojo (flor nacional) -->
-    <path d="M262 150 C214 160 206 236 222 268 L240 252 L262 276 L284 252 L302 268 C318 236 310 160 262 150 Z"
+    <!-- Copihue rojo (flor nacional): campana colgando de su enredadera -->
+    <path d="M150 96 Q236 78 262 150" stroke="#2f5a2a" stroke-width="9" stroke-linecap="round" fill="none"/>
+    <path d="M196 92 Q214 66 236 78 Q218 96 196 92 Z" fill="#3d7a34"/>
+    <path d="M262 146 C230 150 208 214 214 268 L238 254 L262 278 L286 254 L310 268 C316 214 294 150 262 146 Z"
           fill="#d7263d"/>
-    <path d="M262 160 C246 190 246 236 262 270" stroke="#9c1a2b" stroke-width="6" fill="none"
+    <path d="M248 150 L262 136 L276 150 Z" fill="#3d7a34"/>
+    <path d="M262 156 C250 190 250 230 262 268" stroke="#9c1a2b" stroke-width="6" fill="none"
           stroke-dasharray="12 8" stroke-linecap="round"/>
     <!-- Flor amarilla -->
     <g fill="#f4c430">

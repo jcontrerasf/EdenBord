@@ -1,0 +1,43 @@
+[package]
+name = "edenbord"
+description = "Editor de bordados para máquinas Janome (JEF)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+eframe = "0.37.0"
+bordado = { version = "0.1.0", path = "../bordado" }
+jef = { version = "0.1.0", path = "../jef" }
+kurbo = "0.13"
+rfd = "0.17.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# `cargo deb -p edenbord` (ver "Empaquetado" en CLAUDE.md).
+[package.metadata.deb]
+name = "edenbord"
+maintainer = "Julio Contreras"
+section = "graphics"
+extended-description = """\
+Abre, edita y crea bordados para máquinas Janome. Lee y escribe JEF, y guarda proyectos \
+editables .edenbord (formas con tipo de puntada) que se exportan a JEF."""
+depends = "$auto"
+recommends = "xdg-desktop-portal"
+assets = [
+    ["target/release/edenbord", "usr/bin/", "755"],
+    ["../../packaging/linux/edenbord.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/edenbord-mime.xml", "usr/share/mime/packages/edenbord.xml", "644"],
+    ["../../assets/edenbord.svg", "usr/share/icons/hicolor/scalable/apps/edenbord.svg", "644"],
+    ["../../assets/edenbord-16.png", "usr/share/icons/hicolor/16x16/apps/edenbord.png", "644"],
+    ["../../assets/edenbord-32.png", "usr/share/icons/hicolor/32x32/apps/edenbord.png", "644"],
+    ["../../assets/edenbord-48.png", "usr/share/icons/hicolor/48x48/apps/edenbord.png", "644"],
+    ["../../assets/edenbord-64.png", "usr/share/icons/hicolor/64x64/apps/edenbord.png", "644"],
+    ["../../assets/edenbord-128.png", "usr/share/icons/hicolor/128x128/apps/edenbord.png", "644"],
+    ["../../assets/edenbord-256.png", "usr/share/icons/hicolor/256x256/apps/edenbord.png", "644"],
+    ["../../assets/edenbord-512.png", "usr/share/icons/hicolor/512x512/apps/edenbord.png", "644"],
+    ["../../LICENSE", "usr/share/doc/edenbord/copyright", "644"],
+]

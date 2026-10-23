@@ -1,11 +1,14 @@
-# Editor de bordados JEF (Janome)
+# EdenBord — editor de bordados JEF (Janome)
+
+Nombre: "Eden" por el himno de Chile ("y tu campo de flores bordado es la copia feliz del
+Edén"), "Bord" por bordado. Licencia GPL-3.0-or-later. Versión única en `[workspace.package]`.
 
 Workspace Rust con tres crates:
 
 - `crates/jef` — librería sin UI: lectura/escritura JEF, paleta Janome, operaciones de edición.
-- `crates/bordado` — librería sin UI: proyectos editables `.bordado` (formas + tipo de puntada),
+- `crates/bordado` — librería sin UI: proyectos editables `.edenbord` (formas + tipo de puntada),
   generación de puntadas, importar SVG, texto con fuentes TTF/OTF.
-- `crates/editor` — app egui/eframe 0.37 (binario `editor`) que usa ambas.
+- `crates/edenbord` — app egui/eframe 0.37 (binario `edenbord`) que usa ambas.
 
 Código, comentarios, mensajes de error e interfaz están **en español**. Mantenerlo así.
 
@@ -15,9 +18,9 @@ Código, comentarios, mensajes de error e interfaz están **en español**. Mante
 cargo test --workspace                          # incluye pruebas con archivos reales (ver abajo)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
-cargo run -p editor -- archivo.jef
+cargo run -p edenbord -- archivo.jef
 cargo run -p jef --example info -- a.jef b.jef  # resumen en terminal
-cargo run -p bordado --example generar -- dibujo.svg salida.jef vista.svg  # SVG/.bordado → JEF + vista
+cargo run -p bordado --example generar -- dibujo.svg salida.jef vista.svg  # SVG/.edenbord → JEF + vista
 ```
 
 ## Archivos reales de prueba
@@ -82,11 +85,13 @@ Rarezas encontradas:
 - En las operaciones, `sel: &[usize]` vacío = todos los bloques. Las operaciones llaman a
   `refresh_header()`; `set_blocks` no lo hace (para la invariante de identidad).
 
-## Proyectos `.bordado` (`crates/bordado/src`)
+## Proyectos `.edenbord` (`crates/bordado/src`)
 
-Formato propio (no hay estándar abierto): JSON legible, `{"formato":"bordado","version":1,
+Formato propio (no hay estándar abierto): JSON legible, `{"formato":"edenbord","version":1,
 "bastidor":<código Hoop>,"objetos":[…]}`. Unidades **mm**, y hacia abajo, origen = centro del
-bastidor. El orden de `objetos` es el orden de bordado.
+bastidor. El orden de `objetos` es el orden de bordado. Los proyectos antiguos (extensión
+`.bordado`, `"formato":"bordado"` = `FORMATO_ANTIGUO`) se siguen leyendo; Ctrl+S sobre uno de
+ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto literal.
 
 - `Objeto { nombre, visible, color (paleta Janome), forma, puntada }`.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
@@ -106,10 +111,10 @@ bastidor. El orden de `objetos` es el orden de bordado.
 - `svg.rs`: usvg (transforms, unidades, textos con fuentes del sistema) → objetos guía,
   color = `palette::nearest`, centrados en el origen. 96 px por pulgada.
 - `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible}`.
-  Imagen para calcar; no se borda. Ruta relativa = desde la carpeta del `.bordado`.
+  Imagen para calcar; no se borda. Ruta relativa = desde la carpeta del `.edenbord`.
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
-## Editor (`crates/editor/src`)
+## App (`crates/edenbord/src`)
 
 - `main.rs`: estado `Editor`, panel lateral, atajos, diálogos (paleta, confirmaciones), guardado.
 - `doc.rs`: `Doc` = diseño + visibilidad/selección por bloque + historial (100 copias del `Jef`).
@@ -118,7 +123,7 @@ bastidor. El orden de `objetos` es el orden de bordado.
 - `canvas.rs`: dibujo (común: `draw_stitches`, `Vista`), zoom/desplazamiento, arrastre de la
   selección; en proyectos, clic elige objeto (`ProyectoDoc::object_at`).
 - Hay a lo sumo un documento abierto: `Editor.doc` (JEF) **o** `Editor.proyecto`. Abrir decide
-  por extensión (`.jef`, `.bordado`, `.svg` → proyecto nuevo con guías).
+  por extensión (`.jef`, `.edenbord`/`.bordado`, `.svg` → proyecto nuevo con guías).
 - `proyecto.rs`: `ProyectoDoc` = proyecto + selección + historial (copias del `Proyecto`) +
   puntadas generadas y polilíneas en caché (se recalculan en `sync()` tras cada edición).
   `edit_grouped(clave, …)` junta en un solo deshacer las ediciones continuas (arrastrar valores).
@@ -134,7 +139,7 @@ bastidor. El orden de `objetos` es el orden de bordado.
   líneas fuertes cada 10 mm (o 5 pasos), ejes más oscuros. Regla: `Editor.ruler` (mm),
   Shift = múltiplos de 45° (`snap45`), Esc borra; sirve en JEF y proyectos.
 - Fondo: textura en `Editor.fondo_tex` (crate `image`), recargada en `logic` si cambia la ruta.
-- `panel_proyecto.rs`: guardar `.bordado` (relee y compara), exportar JEF (`write_verified`),
+- `panel_proyecto.rs`: guardar `.edenbord` (relee y compara), exportar JEF (`write_verified`),
   importar SVG, agregar texto, lista de objetos, propiedades/puntada. Transformar usa el mismo
   `Op` que los JEF (`apply_jef` / `apply_proyecto`); en proyectos escalar re-densifica solo.
 - Guardar es solo "Guardar como…" (sugiere `<nombre>_editado.jef`), relee para verificar y pide
@@ -145,10 +150,28 @@ bastidor. El orden de `objetos` es el orden de bordado.
   `egui::Panel::left(..).default_size(..).show(ui, ..)`; `CentralPanel::show(ui, ..)`;
   `Window::show(ctx, ..)`; `DroppedFile` es un trait (`f.path()`).
 
+## Empaquetado y versiones
+
+- `assets/edenbord.svg` es el icono; `packaging/iconos.sh` regenera los PNG y el `.ico`
+  (Inkscape + ImageMagick). La ventana usa `edenbord-256.png` (`include_bytes!`), el `.exe` el
+  `.ico` (`build.rs` con `winresource`, solo al compilar en Windows).
+- `app_id` = `edenbord` = nombre del `.desktop`, del icono instalado y `StartupWMClass`.
+- `.deb`: `cargo deb -p edenbord` (metadatos en `crates/edenbord/Cargo.toml`); instala
+  `.desktop`, iconos hicolor y tipos MIME (`packaging/linux/`).
+- AppImage: `packaging/appimage.sh [versión]` (necesita `appimagetool`, o la variable
+  `APPIMAGETOOL`). Salida en `target/paquetes/`.
+- Windows: `packaging/windows/edenbord.iss` (Inno Setup; asocia `.edenbord` y opcionalmente
+  `.jef`) + zip portable. Solo se arma en CI.
+- `.github/workflows/ci.yml`: fmt, clippy, tests (Linux) y build en Windows.
+  `release.yml`: con tag `vX.Y.Z` (debe coincidir con la versión de Cargo.toml) arma .deb,
+  AppImage, instalador y zip y publica el Release; `workflow_dispatch` solo deja artefactos.
+- Sacar versión: subir `version` en `[workspace.package]`, commit, `git tag vX.Y.Z`,
+  `git push --tags`.
+
 ## Estado y próximos pasos
 
 Hecho: lectura/escritura, visor, edición básica (mover, rotar, espejar, escalar, centrar,
-recolorear, reordenar, borrar, combinar, deshacer, guardar como). Proyectos `.bordado`:
+recolorear, reordenar, borrar, combinar, deshacer, guardar como). Proyectos `.edenbord`:
 importar SVG, convertir trazados en relleno/satín/pespunte, texto TTF, exportar JEF.
 
 Calcar: imagen de fondo + pluma + combinar zonas.

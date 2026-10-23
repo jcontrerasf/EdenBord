@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=EdenBord
+GenericName=Editor de bordados
+Comment=Edita y crea bordados para máquinas Janome (JEF)
+Exec=edenbord %f
+Icon=edenbord
+Terminal=false
+Categories=Graphics;VectorGraphics;
+Keywords=bordado;embroidery;janome;jef;
+MimeType=application/x-edenbord;application/x-jef;
+StartupWMClass=edenbord

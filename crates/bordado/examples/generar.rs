@@ -1,6 +1,6 @@
-//! Genera un JEF desde un proyecto `.bordado` o un SVG, sin abrir el editor.
+//! Genera un JEF desde un proyecto `.edenbord` o un SVG, sin abrir el editor.
 //!
-//! `cargo run -p bordado --example generar -- entrada.(bordado|svg) salida.jef [vista.svg]`
+//! `cargo run -p bordado --example generar -- entrada.(edenbord|svg) salida.jef [vista.svg]`
 //!
 //! A un SVG se le asigna relleno a las zonas y pespunte triple a las líneas. Con `vista.svg`
 //! se dibujan además las puntadas, para revisarlas en cualquier visor.
@@ -13,7 +13,7 @@ use jef::StitchKind;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [entrada, salida, rest @ ..] = args.as_slice() else {
-        eprintln!("uso: generar entrada.(bordado|svg) salida.jef [vista.svg]");
+        eprintln!("uso: generar entrada.(edenbord|svg) salida.jef [vista.svg]");
         std::process::exit(2);
     };
     let proyecto = if entrada.to_lowercase().ends_with(".svg") {

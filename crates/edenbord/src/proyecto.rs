@@ -1,4 +1,4 @@
-//! Proyecto `.bordado` abierto: objetos, selección, historial y las puntadas generadas.
+//! Proyecto `.edenbord` abierto: objetos, selección, historial y las puntadas generadas.
 
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use kurbo::{Affine, Point, Rect, Vec2};
 const HISTORY_LIMIT: usize = 100;
 
 pub struct ProyectoDoc {
-    /// Archivo `.bordado`; `None` si todavía no se guardó (proyecto nuevo o SVG importado).
+    /// Archivo `.edenbord`; `None` si todavía no se guardó (proyecto nuevo o SVG importado).
     pub path: Option<PathBuf>,
     /// Nombre para mostrar y para sugerir al guardar.
     pub nombre: String,

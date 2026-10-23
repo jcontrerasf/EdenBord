@@ -1,4 +1,4 @@
-//! Panel lateral de un proyecto `.bordado`: objetos, tipo de puntada, guardar y exportar.
+//! Panel lateral de un proyecto `.edenbord`: objetos, tipo de puntada, guardar y exportar.
 
 use std::path::PathBuf;
 
@@ -26,7 +26,7 @@ impl Editor {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button("💾 Guardar")
-                .on_hover_text("Ctrl+S · proyecto editable .bordado")
+                .on_hover_text("Ctrl+S · proyecto editable .edenbord")
                 .clicked()
             {
                 save = Some(false);
@@ -281,23 +281,27 @@ impl Editor {
         self.pen = Default::default();
     }
 
-    /// Guarda el `.bordado`; con `ask` (o si nunca se guardó) pregunta dónde.
+    /// Guarda el `.edenbord`; con `ask` (o si nunca se guardó) pregunta dónde.
     pub(crate) fn save_project(&mut self, ask: bool) {
         let Some(doc) = &mut self.proyecto else {
             return;
         };
+        // Un `.bordado` antiguo se guarda como `.edenbord` nuevo (pregunta dónde).
         let path = match (&doc.path, ask) {
-            (Some(p), false) => p.clone(),
+            (Some(p), false) if p.extension().is_some_and(|e| e == bordado::EXTENSION) => p.clone(),
             _ => {
                 let mut dialog = rfd::FileDialog::new()
-                    .add_filter("Proyecto de bordado", &["bordado"])
-                    .set_file_name(format!("{}.bordado", doc.nombre));
+                    .add_filter("Proyecto EdenBord", &[bordado::EXTENSION])
+                    .set_file_name(format!("{}.{}", doc.nombre, bordado::EXTENSION));
                 if let Some(dir) = doc.path.as_deref().and_then(|p| p.parent()) {
                     dialog = dialog.set_directory(dir);
                 }
-                let Some(p) = dialog.save_file() else {
+                let Some(mut p) = dialog.save_file() else {
                     return;
                 };
+                if p.extension().is_none() {
+                    p.set_extension(bordado::EXTENSION);
+                }
                 p
             }
         };

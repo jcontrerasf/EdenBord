@@ -1,4 +1,4 @@
-//! Proyectos de bordado editables (`.bordado`) y su conversión a puntadas JEF.
+//! Proyectos de bordado editables (`.edenbord`) y su conversión a puntadas JEF.
 //!
 //! Un proyecto es una lista de objetos (formas en mm con un color y un tipo de puntada).
 //! [`Proyecto::generar`] calcula las puntadas; el proyecto se puede seguir editando y volver
@@ -13,7 +13,8 @@ pub mod texto;
 use kurbo::{Affine, BezPath, Point};
 
 pub use proyecto::{
-    FORMATO, Fondo, Forma, Objeto, PRESETS, Proyecto, ProyectoError, Puntada, VERSION,
+    EXTENSION, FORMATO, FORMATO_ANTIGUO, Fondo, Forma, Objeto, PRESETS, Proyecto, ProyectoError,
+    Puntada, VERSION,
 };
 
 use geom::{Polilinea, polilineas};

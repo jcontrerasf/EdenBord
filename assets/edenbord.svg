@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- EdenBord: bastidor de bordado con un campo de flores bordado. -->
+  <defs>
+    <clipPath id="tela"><circle cx="256" cy="272" r="196"/></clipPath>
+  </defs>
+  <!-- Tornillo del bastidor -->
+  <rect x="226" y="18" width="60" height="44" rx="10" fill="#8a5a2b"/>
+  <rect x="238" y="8" width="36" height="22" rx="6" fill="#b9b9b9"/>
+  <!-- Aro exterior e interior -->
+  <circle cx="256" cy="272" r="232" fill="#c98c4f"/>
+  <circle cx="256" cy="272" r="214" fill="#a96f37"/>
+  <circle cx="256" cy="272" r="198" fill="#f6efe0"/>
+  <g clip-path="url(#tela)">
+    <!-- Cielo y loma -->
+    <rect x="40" y="60" width="440" height="430" fill="#dcecf5"/>
+    <path d="M40 330 Q170 260 300 300 T480 280 V500 H40 Z" fill="#7fb069"/>
+    <path d="M40 390 Q190 330 320 370 T480 350 V500 H40 Z" fill="#5c9450"/>
+    <!-- Puntadas de pasto -->
+    <g stroke="#3d6b35" stroke-width="7" stroke-linecap="round" fill="none" stroke-dasharray="16 10">
+      <path d="M90 470 L110 400"/><path d="M150 480 L160 410"/><path d="M380 470 L365 405"/>
+      <path d="M430 450 L420 390"/><path d="M300 485 L310 415"/>
+    </g>
+    <!-- Tallos -->
+    <g stroke="#2f5a2a" stroke-width="9" stroke-linecap="round" fill="none">
+      <path d="M150 360 Q160 300 150 250"/>
+      <path d="M260 400 Q250 320 262 220"/>
+      <path d="M365 365 Q355 310 370 265"/>
+    </g>
+    <!-- Flor azul -->
+    <g fill="#3b6fc4">
+      <circle cx="150" cy="222" r="22"/><circle cx="122" cy="246" r="22"/><circle cx="178" cy="246" r="22"/>
+      <circle cx="132" cy="276" r="22"/><circle cx="168" cy="276" r="22"/>
+    </g>
+    <circle cx="150" cy="254" r="15" fill="#f4c430"/>
+    <!-- Copihue rojo (flor nacional) -->
+    <path d="M262 150 C214 160 206 236 222 268 L240 252 L262 276 L284 252 L302 268 C318 236 310 160 262 150 Z"
+          fill="#d7263d"/>
+    <path d="M262 160 C246 190 246 236 262 270" stroke="#9c1a2b" stroke-width="6" fill="none"
+          stroke-dasharray="12 8" stroke-linecap="round"/>
+    <!-- Flor amarilla -->
+    <g fill="#f4c430">
+      <circle cx="370" cy="232" r="20"/><circle cx="342" cy="256" r="20"/><circle cx="398" cy="256" r="20"/>
+      <circle cx="352" cy="286" r="20"/><circle cx="388" cy="286" r="20"/>
+    </g>
+    <circle cx="370" cy="264" r="14" fill="#c0532b"/>
+  </g>
+  <!-- Pespunte alrededor de la tela -->
+  <circle cx="256" cy="272" r="184" fill="none" stroke="#a96f37" stroke-width="5"
+          stroke-dasharray="14 10" stroke-linecap="round" opacity="0.7"/>
+</svg>

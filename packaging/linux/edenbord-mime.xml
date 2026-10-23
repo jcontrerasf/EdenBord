@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-edenbord">
+    <comment>Proyecto EdenBord</comment>
+    <sub-class-of type="application/json"/>
+    <generic-icon name="edenbord"/>
+    <glob pattern="*.edenbord"/>
+  </mime-type>
+  <mime-type type="application/x-jef">
+    <comment>Bordado Janome</comment>
+    <glob pattern="*.jef" case-sensitive="false"/>
+  </mime-type>
+</mime-info>

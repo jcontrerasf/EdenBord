@@ -1,4 +1,4 @@
-//! Modelo del proyecto editable `.bordado` (JSON).
+//! Modelo del proyecto editable `.edenbord` (JSON).
 //!
 //! Todo va en milímetros, con y hacia abajo y el origen en el centro del bastidor. Las formas
 //! se guardan como el atributo `d` de SVG para que el archivo sea legible y fácil de editar.
@@ -9,7 +9,12 @@ use kurbo::{Affine, BezPath, PathEl};
 use serde::{Deserialize, Serialize};
 
 /// Valor del campo `formato`, para reconocer el archivo.
-pub const FORMATO: &str = "bordado";
+pub const FORMATO: &str = "edenbord";
+/// Valor de `formato` en los proyectos anteriores al nombre EdenBord (extensión `.bordado`).
+/// Se siguen leyendo; al guardar se escribe [`FORMATO`].
+pub const FORMATO_ANTIGUO: &str = "bordado";
+/// Extensión de los archivos de proyecto (sin punto).
+pub const EXTENSION: &str = "edenbord";
 /// Versión del formato que escribe esta librería.
 pub const VERSION: u32 = 1;
 
@@ -219,10 +224,11 @@ impl Default for Proyecto {
 
 impl Proyecto {
     pub fn leer(texto: &str) -> Result<Self, ProyectoError> {
-        let p: Proyecto = serde_json::from_str(texto)?;
-        if p.formato != FORMATO {
+        let mut p: Proyecto = serde_json::from_str(texto)?;
+        if p.formato != FORMATO && p.formato != FORMATO_ANTIGUO {
             return Err(ProyectoError::Formato(p.formato));
         }
+        p.formato = FORMATO.into();
         if p.version > VERSION {
             return Err(ProyectoError::Version(p.version));
         }
@@ -341,13 +347,21 @@ mod tests {
     }
 
     #[test]
+    fn reads_old_format() {
+        let text = r#"{"formato":"bordado","version":1,"bastidor":0,"objetos":[]}"#;
+        let p = Proyecto::leer(text).unwrap();
+        assert_eq!(p, Proyecto::default());
+        assert!(p.guardar().contains(r#""formato": "edenbord""#));
+    }
+
+    #[test]
     fn rejects_other_formats() {
         let text = r#"{"formato":"otro","version":1,"bastidor":0,"objetos":[]}"#;
         assert!(matches!(
             Proyecto::leer(text),
             Err(ProyectoError::Formato(_))
         ));
-        let text = r#"{"formato":"bordado","version":99,"bastidor":0,"objetos":[]}"#;
+        let text = r#"{"formato":"edenbord","version":99,"bastidor":0,"objetos":[]}"#;
         assert!(matches!(
             Proyecto::leer(text),
             Err(ProyectoError::Version(99))

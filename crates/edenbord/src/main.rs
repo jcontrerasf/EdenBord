@@ -1,6 +1,9 @@
-//! Editor de archivos JEF y proyectos de bordado `.bordado`.
+//! EdenBord: editor de archivos JEF y proyectos de bordado `.edenbord`.
 //!
-//! `cargo run -p editor -- [archivo.jef | proyecto.bordado | dibujo.svg]`
+//! `cargo run -p edenbord -- [archivo.jef | proyecto.edenbord | dibujo.svg]`
+
+// Sin ventana de consola en Windows (en depuración se deja, para ver los mensajes).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod canvas;
 mod doc;
@@ -20,18 +23,25 @@ use proyecto::ProyectoDoc;
 const PLAY_RATE: f32 = 400.0;
 /// Puntadas más largas que esto (0,1 mm) se marcan como sospechosas.
 const LONG_STITCH: i32 = 120;
+/// Nombre visible de la aplicación.
+const APP: &str = "EdenBord";
+/// Identificador para el escritorio (debe coincidir con el `.desktop` y el icono instalado).
+const APP_ID: &str = "edenbord";
+const ICON: &[u8] = include_bytes!("../../../assets/edenbord-256.png");
 
 fn main() -> eframe::Result {
     let initial = std::env::args_os().nth(1).map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Editor JEF")
+            .with_title(APP)
+            .with_app_id(APP_ID)
+            .with_icon(eframe::icon_data::from_png_bytes(ICON).expect("icono PNG válido"))
             .with_inner_size([1200.0, 800.0])
             .with_drag_and_drop(true),
         ..Default::default()
     };
     eframe::run_native(
-        "Editor JEF",
+        APP,
         options,
         Box::new(move |_cc| {
             let mut app = Editor::default();
@@ -79,6 +89,8 @@ struct Editor {
     proyecto: Option<ProyectoDoc>,
     message: Option<(String, bool)>,
     pending: Option<Pending>,
+    /// Ventana "Acerca de" abierta.
+    about: bool,
     /// Bloque (JEF) u objeto (proyecto) cuyo color se está eligiendo.
     picking_color: Option<usize>,
     /// Última fuente usada para agregar texto.
@@ -126,6 +138,7 @@ impl Default for Editor {
             proyecto: None,
             message: None,
             pending: None,
+            about: false,
             picking_color: None,
             last_font: None,
             tool: Tool::Select,
@@ -170,10 +183,10 @@ fn open_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
         .add_filter(
             "Bordados, proyectos y vectores",
-            &["jef", "JEF", "bordado", "svg", "SVG"],
+            &["jef", "JEF", bordado::EXTENSION, "bordado", "svg", "SVG"],
         )
         .add_filter("Bordado Janome", &["jef", "JEF"])
-        .add_filter("Proyecto de bordado", &["bordado"])
+        .add_filter("Proyecto EdenBord", &[bordado::EXTENSION, "bordado"])
         .add_filter("Vector SVG", &["svg", "SVG"])
 }
 
@@ -221,7 +234,7 @@ impl Editor {
         }
     }
 
-    /// Abre según la extensión: `.bordado` proyecto, `.svg` proyecto nuevo con sus trazados
+    /// Abre según la extensión: `.edenbord` (o el antiguo `.bordado`) proyecto, `.svg` proyecto nuevo con sus trazados
     /// como guías, cualquier otra cosa como JEF.
     fn open(&mut self, path: Option<&Path>) {
         let Some(path) = path else {
@@ -238,7 +251,7 @@ impl Editor {
             .to_string_lossy()
             .into_owned();
         let result = match extension(path).as_str() {
-            "bordado" => bordado::Proyecto::leer_archivo(path)
+            "edenbord" | "bordado" => bordado::Proyecto::leer_archivo(path)
                 .map(|p| self.set_proyecto(ProyectoDoc::new(Some(path.into()), stem, p)))
                 .map_err(|e| e.to_string()),
             "svg" => bordado::svg::importar_archivo(path)
@@ -433,6 +446,13 @@ impl Editor {
             if ui.button("🆕 Proyecto nuevo").clicked() {
                 self.request_open(None);
             }
+            if ui
+                .button("ℹ")
+                .on_hover_text(format!("Acerca de {APP}"))
+                .clicked()
+            {
+                self.about = true;
+            }
         });
         if self.proyecto.is_some() {
             self.show_message(ui);
@@ -461,7 +481,7 @@ impl Editor {
 
         let Some(doc) = &mut self.doc else {
             ui.label(
-                "Abre un .jef, un proyecto .bordado o un dibujo .svg, o arrástralo a la ventana.",
+                "Abre un .jef, un proyecto .edenbord o un dibujo .svg, o arrástralo a la ventana.",
             );
             return;
         };
@@ -886,6 +906,25 @@ impl Editor {
         }
     }
 
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new(format!("Acerca de {APP}"))
+            .open(&mut self.about)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.heading(format!("{APP} {}", env!("CARGO_PKG_VERSION")));
+                ui.label("Editor de bordados para máquinas Janome (JEF).");
+                ui.add_space(6.0);
+                ui.label(
+                    "Eden viene del himno de Chile: «y tu campo de flores bordado es la copia \
+                     feliz del Edén». Bord, de bordado.",
+                );
+                ui.add_space(6.0);
+                ui.label("Software libre bajo la licencia GPL-3.0 o posterior.");
+            });
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let name = match (&self.doc, &self.proyecto) {
             (Some(doc), _) => Some(file_name(&doc.path)),
@@ -893,11 +932,8 @@ impl Editor {
             _ => None,
         };
         let title = match name {
-            Some(name) => format!(
-                "{}{name} — Editor JEF",
-                if self.dirty() { "• " } else { "" },
-            ),
-            None => "Editor JEF".into(),
+            Some(name) => format!("{}{name} — EdenBord", if self.dirty() { "• " } else { "" },),
+            None => "EdenBord".into(),
         };
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -945,6 +981,7 @@ impl eframe::App for Editor {
             .show(ui, |ui| self.canvas(ui));
         self.color_picker(&ctx);
         self.confirm_dialog(&ctx);
+        self.about_dialog(&ctx);
     }
 }
 

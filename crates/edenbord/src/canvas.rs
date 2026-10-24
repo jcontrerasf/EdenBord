@@ -571,12 +571,9 @@ fn draw_stitches(
                     });
                     run.push(vista.p(prev.0, prev.1));
                 }
-                run.push(p);
+                push_point(&mut shapes, &mut run, p, stroke);
             } else {
-                if run.len() > 1 {
-                    shapes.push(Shape::line(std::mem::take(&mut run), stroke));
-                }
-                run.clear();
+                flush_run(&mut shapes, &mut run, stroke);
                 if show_jumps && s.kind == StitchKind::Jump && i > 0 {
                     let prev = jef.stitches[i - 1];
                     shapes.extend(Shape::dashed_line(
@@ -588,11 +585,39 @@ fn draw_stitches(
                 }
             }
         }
-        if run.len() > 1 {
-            shapes.push(Shape::line(run, stroke));
-        }
+        flush_run(&mut shapes, &mut run, stroke);
     }
     painter.extend(shapes);
+}
+
+/// Agrega `p` a la polilínea en curso. egui une los tramos en inglete sin límite: en vueltas
+/// cerradas (remates, ida y vuelta) eso dibuja púas largas, y los tramos de largo 0 dan
+/// esquinas erráticas. Por eso se omiten los puntos repetidos y la línea se corta en cada vuelta
+/// de más de ~110°, tapando el corte con un círculo del grosor del hilo.
+fn push_point(shapes: &mut Vec<Shape>, run: &mut Vec<Pos2>, p: Pos2, stroke: Stroke) {
+    let Some(&last) = run.last() else {
+        run.push(p);
+        return;
+    };
+    if (p - last).length_sq() < 0.25 {
+        return;
+    }
+    if let [.., before, _] = run[..] {
+        let (a, b) = ((last - before).normalized(), (p - last).normalized());
+        if a.dot(b) < -0.35 {
+            flush_run(shapes, run, stroke);
+            shapes.push(Shape::circle_filled(last, stroke.width / 2.0, stroke.color));
+            run.push(last);
+        }
+    }
+    run.push(p);
+}
+
+fn flush_run(shapes: &mut Vec<Shape>, run: &mut Vec<Pos2>, stroke: Stroke) {
+    if run.len() > 1 {
+        shapes.push(Shape::line(std::mem::take(run), stroke));
+    }
+    run.clear();
 }
 
 fn draw_selection_frame(painter: &egui::Painter, r: Rect) {

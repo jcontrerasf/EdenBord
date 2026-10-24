@@ -9,7 +9,7 @@ use jef::{Bounds, Jef, StitchKind};
 
 use crate::gestos::{self, Blanco, Gesto, Tipo};
 use crate::nodos::{self, Lado};
-use crate::{Editor, Tool};
+use crate::{Editor, Tool, iconos, tema};
 
 pub(crate) const SELECTION_COLOR: Color32 = Color32::from_rgb(30, 110, 230);
 const PEN_COLOR: Color32 = Color32::from_rgb(220, 0, 140);
@@ -79,21 +79,32 @@ impl Editor {
             .inner_margin(4.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.tool, Tool::Select, "🖱 Seleccionar");
+                    let mut tools = vec![(Tool::Select, iconos::SELECCIONAR, "Seleccionar (S)")];
                     if self.proyecto.is_some() {
-                        ui.selectable_value(&mut self.tool, Tool::Nodes, "⬚ Nodos")
-                            .on_hover_text(
-                                "N · arrastrar nodos y manijas · doble clic en el trazo: \
-                                 agregar nodo · Supr: borrar nodo",
-                            );
-                        ui.selectable_value(&mut self.tool, Tool::Pen, "✒ Pluma");
+                        tools.push((
+                            Tool::Nodes,
+                            iconos::NODOS,
+                            "Nodos (N) · arrastrar nodos y manijas · doble clic en el trazo: \
+                             agregar nodo · Supr: borrar nodo",
+                        ));
+                        tools.push((Tool::Pen, iconos::PLUMA, "Pluma (P) · calcar contornos"));
                     }
-                    ui.selectable_value(&mut self.tool, Tool::Ruler, "📏 Regla")
-                        .on_hover_text(
-                            "Arrastrar para medir · Shift: múltiplos de 45° · Esc: borrar",
-                        );
+                    tools.push((
+                        Tool::Ruler,
+                        iconos::REGLA,
+                        "Regla (R) · arrastrar para medir · Shift: múltiplos de 45° · Esc: borrar",
+                    ));
+                    for (tool, ico, ayuda) in tools {
+                        if tema::interruptor(ui, self.tool == tool, ico, ayuda).clicked() {
+                            self.tool = tool;
+                        }
+                    }
                     ui.separator();
-                    ui.checkbox(&mut self.show_grid, "# Cuadrícula");
+                    if tema::interruptor(ui, self.show_grid, iconos::CUADRICULA, "Cuadrícula en mm")
+                        .clicked()
+                    {
+                        self.show_grid = !self.show_grid;
+                    }
                     if let Some(p) = self.pointer_mm {
                         ui.separator();
                         ui.monospace(format!("x {:7.1}  y {:7.1} mm", p.x, p.y));

@@ -190,6 +190,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   confirmación antes de sobrescribir el archivo abierto.
 - `progress == usize::MAX` significa "mostrar todo" (para que la simulación no corte diseños
   que crecen al editar).
+- `tema.rs`: tema claro "lino" (paleta del icono: copihue = acento, hoja = acción principal,
+  `AVISO` dorado oscuro), Inter + Phosphor incrustadas (`assets/fuentes/`, ver su `LEEME.md`:
+  Inter va recortada sin el área de uso privado, si no tapa los íconos). Helpers
+  `boton_icono[_si]`, `interruptor` (ícono Fill sobre copihue si está activo),
+  `boton_principal`. `iconos.rs`: constantes Phosphor usadas (agregar acá las nuevas, códigos
+  del crate `egui-phosphor`, que no tiene versión para egui 0.37). No usar emojis en la UI.
 - API de egui 0.37 (distinta a versiones viejas): `App::ui(&mut self, ui, frame)` + `App::logic`;
   `egui::Panel::left(..).default_size(..).show(ui, ..)`; `CentralPanel::show(ui, ..)`;
   `Window::show(ctx, ..)`; `DroppedFile` es un trait (`f.path()`).

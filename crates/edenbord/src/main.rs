@@ -8,10 +8,12 @@
 mod canvas;
 mod doc;
 mod gestos;
+mod iconos;
 mod nodos;
 mod panel_proyecto;
 mod pluma;
 mod proyecto;
+mod tema;
 
 use std::path::{Path, PathBuf};
 
@@ -45,7 +47,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         APP,
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            tema::instalar(&cc.egui_ctx);
             let mut app = Editor::default();
             if let Some(path) = initial {
                 app.open(Some(&path));
@@ -579,19 +582,18 @@ impl Editor {
 
     fn side_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui.button("📂 Abrir…").clicked()
+            if ui.button(format!("{} Abrir…", iconos::ABRIR)).clicked()
                 && let Some(path) = open_dialog().pick_file()
             {
                 self.request_open(Some(path));
             }
-            if ui.button("🆕 Proyecto nuevo").clicked() {
-                self.request_open(None);
-            }
             if ui
-                .button("ℹ")
-                .on_hover_text(format!("Acerca de {APP}"))
+                .button(format!("{} Proyecto nuevo", iconos::NUEVO))
                 .clicked()
             {
+                self.request_open(None);
+            }
+            if tema::boton_icono(ui, iconos::INFO, &format!("Acerca de {APP}")).clicked() {
                 self.about = true;
             }
         });
@@ -604,14 +606,20 @@ impl Editor {
         ui.horizontal_wrapped(|ui| {
             let has_doc = self.doc.is_some();
             if ui
-                .add_enabled(has_doc, egui::Button::new("💾 Guardar como…"))
+                .add_enabled_ui(has_doc, |ui| {
+                    tema::boton_principal(ui, iconos::GUARDAR, "Guardar como…")
+                })
+                .inner
                 .on_hover_text("Ctrl+S")
                 .clicked()
             {
                 self.save_as();
             }
             if ui
-                .add_enabled(has_doc, egui::Button::new("➕ Agregar diseño…"))
+                .add_enabled(
+                    has_doc,
+                    egui::Button::new(format!("{} Agregar diseño…", iconos::AGREGAR)),
+                )
                 .clicked()
             {
                 self.add_design();
@@ -628,16 +636,12 @@ impl Editor {
         };
 
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(doc.can_undo(), egui::Button::new("↶ Deshacer"))
-                .on_hover_text("Ctrl+Z")
+            if tema::boton_icono_si(ui, doc.can_undo(), iconos::DESHACER, "Deshacer (Ctrl+Z)")
                 .clicked()
             {
                 doc.undo();
             }
-            if ui
-                .add_enabled(doc.can_redo(), egui::Button::new("↷ Rehacer"))
-                .on_hover_text("Ctrl+Y")
+            if tema::boton_icono_si(ui, doc.can_redo(), iconos::REHACER, "Rehacer (Ctrl+Y)")
                 .clicked()
             {
                 doc.redo();
@@ -669,7 +673,7 @@ impl Editor {
     fn show_message(&self, ui: &mut egui::Ui) {
         if let Some((text, is_error)) = &self.message {
             let color = if *is_error {
-                Color32::RED
+                tema::COPIHUE
             } else {
                 ui.visuals().text_color()
             };
@@ -700,9 +704,9 @@ impl Editor {
             let mut shown = self.progress.min(total);
             ui.horizontal(|ui| {
                 let label = if self.playing {
-                    "⏸ Pausa"
+                    format!("{} Pausa", iconos::PAUSA)
                 } else {
-                    "▶ Reproducir"
+                    format!("{} Reproducir", iconos::REPRODUCIR)
                 };
                 if ui.button(label).clicked() {
                     if !self.playing && shown >= total {
@@ -710,10 +714,10 @@ impl Editor {
                     }
                     self.playing = !self.playing;
                 }
-                if ui.button("⏮").clicked() {
+                if ui.button(iconos::AL_INICIO).clicked() {
                     shown = 0;
                 }
-                if ui.button("⏭").clicked() {
+                if ui.button(iconos::AL_FIN).clicked() {
                     shown = total;
                     self.playing = false;
                 }
@@ -753,12 +757,19 @@ impl Editor {
         let (_, long) = jef.odd_stitches(0, LONG_STITCH);
         if long > 0 {
             ui.colored_label(
-                Color32::from_rgb(200, 120, 0),
-                format!("⚠ {long} puntadas de más de 12 mm"),
+                tema::AVISO,
+                format!("{} {long} puntadas de más de 12 mm", iconos::AVISO),
             );
         }
         if !jef.trailing.is_empty() {
-            ui.label(format!("⚠ {} bytes extra tras el fin", jef.trailing.len()));
+            ui.colored_label(
+                tema::AVISO,
+                format!(
+                    "{} {} bytes extra tras el fin",
+                    iconos::AVISO,
+                    jef.trailing.len()
+                ),
+            );
         }
     }
 
@@ -787,7 +798,7 @@ impl Editor {
             });
         }
         if !doc.jef.fits_in(doc.jef.header.hoop) {
-            ui.colored_label(Color32::RED, "El diseño no cabe en este bastidor");
+            ui.colored_label(tema::COPIHUE, "El diseño no cabe en este bastidor");
         }
     }
 
@@ -834,19 +845,19 @@ impl Editor {
                     }
                 }
                 if ui
-                    .add_enabled(i > 0, egui::Button::new("⏶").small())
+                    .add_enabled(i > 0, egui::Button::new(iconos::SUBIR).small())
                     .clicked()
                 {
                     action = Some((i, -1));
                 }
                 if ui
-                    .add_enabled(i + 1 < n, egui::Button::new("⏷").small())
+                    .add_enabled(i + 1 < n, egui::Button::new(iconos::BAJAR).small())
                     .clicked()
                 {
                     action = Some((i, 1));
                 }
                 if ui
-                    .add_enabled(n > 1, egui::Button::new("🗑").small())
+                    .add_enabled(n > 1, egui::Button::new(iconos::BORRAR).small())
                     .on_hover_text("Borrar bloque")
                     .clicked()
                 {
@@ -875,7 +886,12 @@ impl Editor {
         let step = (self.step_mm * 10.0).round() as i32;
         ui.horizontal(|ui| {
             ui.label("Mover");
-            for (label, dx, dy) in [("←", -1, 0), ("↑", 0, -1), ("↓", 0, 1), ("→", 1, 0)] {
+            for (label, dx, dy) in [
+                (iconos::IZQUIERDA, -1, 0),
+                (iconos::ARRIBA, 0, -1),
+                (iconos::ABAJO, 0, 1),
+                (iconos::DERECHA, 1, 0),
+            ] {
                 if ui.button(label).clicked() {
                     op = Some(Op::Move(dx * step, dy * step));
                 }
@@ -893,16 +909,16 @@ impl Editor {
             "También: flechas del teclado, o Shift + arrastrar en el lienzo"
         });
         ui.horizontal(|ui| {
-            if ui.button("⟲ 90°").clicked() {
+            if ui.button(format!("{} 90°", iconos::GIRAR_IZQ)).clicked() {
                 op = Some(Op::Rotate(-90.0));
             }
-            if ui.button("⟳ 90°").clicked() {
+            if ui.button(format!("{} 90°", iconos::GIRAR_DER)).clicked() {
                 op = Some(Op::Rotate(90.0));
             }
-            if ui.button("⇆ Espejo").clicked() {
+            if ui.button(format!("{} Espejo", iconos::ESPEJO_H)).clicked() {
                 op = Some(Op::MirrorX);
             }
-            if ui.button("⇅ Espejo").clicked() {
+            if ui.button(format!("{} Espejo", iconos::ESPEJO_V)).clicked() {
                 op = Some(Op::MirrorY);
             }
         });
@@ -930,11 +946,17 @@ impl Editor {
         });
         if warn_scale && !jef::SAFE_SCALE.contains(&(self.scale_pct / 100.0)) {
             ui.colored_label(
-                Color32::from_rgb(200, 120, 0),
-                "⚠ Fuera de 80–120 % la densidad del relleno cambia mucho",
+                tema::AVISO,
+                format!(
+                    "{} Fuera de 80–120 % la densidad del relleno cambia mucho",
+                    iconos::AVISO
+                ),
             );
         }
-        if ui.button("⌖ Centrar en el bastidor").clicked() {
+        if ui
+            .button(format!("{} Centrar en el bastidor", iconos::CENTRAR))
+            .clicked()
+        {
             op = Some(Op::Center);
         }
         op
@@ -982,7 +1004,7 @@ impl Editor {
                                 .fill(Color32::from_rgb(r, g, b))
                                 .min_size(Vec2::new(26.0, 22.0));
                             if i as i32 == current {
-                                button = button.stroke(egui::Stroke::new(2.5, Color32::RED));
+                                button = button.stroke(egui::Stroke::new(2.5, tema::TEXTO));
                             }
                             let hover = format!("{} — Janome {} (n.º {i})", t.name, t.catalog);
                             if ui.add(button).on_hover_text(hover).clicked() {
@@ -1142,7 +1164,7 @@ impl eframe::App for Editor {
             .default_size(320.0)
             .show(ui, |ui| self.side_panel(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
+            .frame(egui::Frame::NONE.fill(tema::LINO))
             .show(ui, |ui| self.canvas(ui));
         self.color_picker(&ctx);
         self.confirm_dialog(&ctx);

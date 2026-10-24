@@ -8,9 +8,8 @@ use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
 use kurbo::{Affine, Point, Shape};
 
-use crate::{Editor, Tool, file_name, write_verified};
-
-const WARNING: Color32 = Color32::from_rgb(200, 120, 0);
+use crate::tema::AVISO as WARNING;
+use crate::{Editor, Tool, file_name, iconos, tema, write_verified};
 
 impl Editor {
     pub(crate) fn proyecto_panel(&mut self, ui: &mut egui::Ui) {
@@ -26,7 +25,7 @@ impl Editor {
         let mut export = false;
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button("💾 Guardar")
+                .button(format!("{} Guardar", iconos::GUARDAR))
                 .on_hover_text("Ctrl+S · proyecto editable .edenbord")
                 .clicked()
             {
@@ -35,8 +34,7 @@ impl Editor {
             if ui.button("Guardar como…").clicked() {
                 save = Some(true);
             }
-            if ui
-                .button("📤 Exportar JEF…")
+            if tema::boton_principal(ui, iconos::EXPORTAR, "Exportar JEF…")
                 .on_hover_text("Genera las puntadas para la máquina")
                 .clicked()
             {
@@ -44,16 +42,12 @@ impl Editor {
             }
         });
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(doc.can_undo(), egui::Button::new("↶ Deshacer"))
-                .on_hover_text("Ctrl+Z")
+            if tema::boton_icono_si(ui, doc.can_undo(), iconos::DESHACER, "Deshacer (Ctrl+Z)")
                 .clicked()
             {
                 doc.undo();
             }
-            if ui
-                .add_enabled(doc.can_redo(), egui::Button::new("↷ Rehacer"))
-                .on_hover_text("Ctrl+Y")
+            if tema::boton_icono_si(ui, doc.can_redo(), iconos::REHACER, "Rehacer (Ctrl+Y)")
                 .clicked()
             {
                 doc.redo();
@@ -62,8 +56,12 @@ impl Editor {
         let mut import = false;
         let mut text = false;
         ui.horizontal(|ui| {
-            import = ui.button("➕ Importar SVG…").clicked();
-            text = ui.button("🔤 Agregar texto…").clicked();
+            import = ui
+                .button(format!("{} Importar SVG…", iconos::SVG))
+                .clicked();
+            text = ui
+                .button(format!("{} Agregar texto…", iconos::TEXTO))
+                .clicked();
         });
         if let Some(ask) = save {
             self.save_project(ask);
@@ -128,7 +126,10 @@ impl Editor {
         let ids = self.nodos_sel.clone();
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!ids.is_empty(), egui::Button::new("Esquina ↔ curva"))
+                .add_enabled(
+                    !ids.is_empty(),
+                    egui::Button::new(format!("{} Esquina ↔ curva", iconos::ESQUINA_CURVA)),
+                )
                 .clicked()
             {
                 doc.edit_nodes(i, |subs| {
@@ -137,7 +138,10 @@ impl Editor {
                 });
             }
             if ui
-                .add_enabled(!ids.is_empty(), egui::Button::new("🗑 Borrar nodos"))
+                .add_enabled(
+                    !ids.is_empty(),
+                    egui::Button::new(format!("{} Borrar nodos", iconos::BORRAR)),
+                )
                 .clicked()
             {
                 doc.edit_nodes(i, |subs| crate::nodos::borrar(subs, &ids));
@@ -150,7 +154,10 @@ impl Editor {
     fn trace_section(&mut self, ui: &mut egui::Ui) {
         ui.strong("Calcar");
         if self.tool != Tool::Pen {
-            ui.small("Elige ✒ Pluma en la barra del lienzo para dibujar contornos.");
+            ui.small(format!(
+                "Elige {} Pluma en la barra del lienzo para dibujar contornos.",
+                iconos::PLUMA
+            ));
         } else {
             ui.small(
                 "Clic: vértice en esquina · arrastrar: vértice con curva · clic en el primero: \
@@ -188,7 +195,7 @@ impl Editor {
         ui.horizontal(|ui| {
             if sel.len() > 1 {
                 combine = ui
-                    .button("⧉ Combinar zonas")
+                    .button(format!("{} Combinar zonas", iconos::COMBINAR))
                     .on_hover_text(
                         "Une los contornos seleccionados; los interiores quedan como agujeros",
                     )
@@ -196,7 +203,7 @@ impl Editor {
             }
             if sel.iter().any(|&i| doc.subpaths(i) > 1) {
                 split = ui
-                    .button("✂ Separar trazados")
+                    .button(format!("{} Separar trazados", iconos::SEPARAR))
                     .on_hover_text(
                         "Cada parte pasa a ser un objeto; los agujeros quedan como zonas aparte \
                          (bórralos o vuelve a combinarlos). Los textos: primero «Convertir en \
@@ -242,7 +249,7 @@ impl Editor {
         let doc = self.proyecto.as_mut().unwrap();
         let mut pick = false;
         ui.horizontal(|ui| {
-            ui.label("Imagen de fondo");
+            ui.label(format!("{} Imagen de fondo", iconos::IMAGEN));
             pick = ui.button("Elegir…").clicked();
             if doc.proyecto.fondo.is_some() && ui.button("Quitar").clicked() {
                 doc.edit(|p| p.fondo = None);
@@ -252,7 +259,7 @@ impl Editor {
             let mut f = fondo.clone();
             ui.horizontal(|ui| {
                 ui.checkbox(&mut f.visible, "Ver");
-                ui.checkbox(&mut f.bloqueado, "🔒 Bloquear")
+                ui.checkbox(&mut f.bloqueado, format!("{} Bloquear", iconos::BLOQUEADO))
                     .on_hover_text("Bloqueada, los clics la atraviesan y no se mueve con el ratón");
                 ui.add(egui::Slider::new(&mut f.opacidad, 0.05..=1.0).text("opacidad"));
             });
@@ -553,7 +560,7 @@ fn info_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) {
         ui.end_row();
     });
     for aviso in &doc.generado.avisos {
-        ui.colored_label(WARNING, format!("⚠ {aviso}"));
+        ui.colored_label(WARNING, format!("{} {aviso}", iconos::AVISO));
     }
 
     let current = Hoop::from_code(doc.proyecto.bastidor);
@@ -611,9 +618,9 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
         let obj = &doc.proyecto.objetos[i];
         let [r, g, b] = jef::palette::thread(obj.color).map_or([128; 3], |t| t.rgb);
         let icon = match obj.forma {
-            Forma::Contorno { .. } => "⬟",
-            Forma::Linea { .. } => "〰",
-            Forma::Texto { .. } => "🔤",
+            Forma::Contorno { .. } => iconos::ZONA,
+            Forma::Linea { .. } => iconos::LINEA,
+            Forma::Texto { .. } => iconos::TEXTO,
         };
         let mut label = egui::RichText::new(format!("{icon} {}. {}", i + 1, obj.nombre));
         if obj.puntada == Puntada::Ninguna {
@@ -656,14 +663,14 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
                 }
             }
             if ui
-                .add(egui::Button::new("⧉").small())
+                .add(egui::Button::new(iconos::DUPLICAR).small())
                 .on_hover_text("Duplicar")
                 .clicked()
             {
                 action = Some((i, 2));
             }
             if ui
-                .add(egui::Button::new("🗑").small())
+                .add(egui::Button::new(iconos::BORRAR).small())
                 .on_hover_text("Borrar")
                 .clicked()
             {
@@ -873,7 +880,13 @@ fn properties_section(
             to_path = true;
         }
         if *alto < 6.0 {
-            ui.colored_label(WARNING, "⚠ Texto chico: el relleno puede perder detalle");
+            ui.colored_label(
+                WARNING,
+                format!(
+                    "{} Texto chico: el relleno puede perder detalle",
+                    iconos::AVISO
+                ),
+            );
         }
     }
     if obj != doc.proyecto.objetos[i] {

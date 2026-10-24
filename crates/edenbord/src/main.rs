@@ -7,6 +7,8 @@
 
 mod canvas;
 mod doc;
+mod gestos;
+mod nodos;
 mod panel_proyecto;
 mod pluma;
 mod proyecto;
@@ -77,6 +79,8 @@ enum Op {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Select,
+    /// Editar los nodos de un trazado.
+    Nodes,
     /// Calcar: clic agrega vértices, arrastrar los curva.
     Pen,
     /// Medir: arrastrar de un punto a otro.
@@ -115,7 +119,17 @@ struct Editor {
     show_grid: bool,
     show_outlines: bool,
     fabric: Color32,
-    /// Arrastre de la selección con Shift: resto en 0,1 mm aún no aplicado.
+    /// Gesto del ratón en curso sobre un proyecto (mover, manijas, rectángulo).
+    gesto: Option<gestos::Gesto>,
+    /// La imagen de fondo está elegida (muestra sus manijas) en vez de objetos.
+    fondo_sel: bool,
+    /// Herramienta de nodos: objeto en edición, nodos elegidos y arrastre en curso.
+    nodos_obj: Option<usize>,
+    nodos_sel: Vec<nodos::Id>,
+    gesto_nodo: Option<canvas::GestoNodo>,
+    /// El próximo pegado va en el mismo lugar (Ctrl+Shift+V), no en el puntero.
+    paste_in_place: bool,
+    /// JEF: arrastre de la selección con Shift; resto en 0,1 mm aún no aplicado.
     moving: bool,
     drag_rest: Vec2,
 
@@ -155,6 +169,12 @@ impl Default for Editor {
             show_grid: true,
             show_outlines: false,
             fabric: Color32::from_rgb(196, 190, 178),
+            gesto: None,
+            fondo_sel: false,
+            nodos_obj: None,
+            nodos_sel: vec![],
+            gesto_nodo: None,
+            paste_in_place: false,
             moving: false,
             drag_rest: Vec2::ZERO,
             step_mm: 1.0,
@@ -290,6 +310,11 @@ impl Editor {
         self.message = None;
         self.pen = pluma::Pluma::default();
         self.ruler = None;
+        self.gesto = None;
+        self.fondo_sel = false;
+        self.nodos_obj = None;
+        self.nodos_sel.clear();
+        self.gesto_nodo = None;
         self.tool = Tool::Select;
         self.picking_color = None;
         self.playing = false;
@@ -378,7 +403,48 @@ impl Editor {
             .fold((0, 0), |acc, (_, dx, dy)| (acc.0 + dx, acc.1 + dy));
             (undo, redo, save, arrows)
         });
-        if self.tool == Tool::Pen && !self.pen.nodos.is_empty() {
+        // Herramientas: S seleccionar, N nodos, P pluma, R regla (pluma y nodos solo en proyectos).
+        let tool = ctx.input_mut(|i| {
+            [
+                (Key::S, Tool::Select),
+                (Key::N, Tool::Nodes),
+                (Key::P, Tool::Pen),
+                (Key::R, Tool::Ruler),
+            ]
+            .into_iter()
+            .find(|&(k, _)| i.consume_key(Modifiers::NONE, k))
+            .map(|(_, t)| t)
+        });
+        if let Some(t) = tool
+            && (self.proyecto.is_some() || matches!(t, Tool::Select | Tool::Ruler))
+            && self.gesto.is_none()
+            && self.gesto_nodo.is_none()
+        {
+            if self.tool == Tool::Ruler && t != Tool::Ruler {
+                self.ruler = None;
+            }
+            self.tool = t;
+        }
+        // Mientras se dibuja con la pluma, deshacer quita el último vértice (no toca el proyecto).
+        let pen_drawing = self.tool == Tool::Pen && !self.pen.nodos.is_empty();
+        let (undo, redo) = if pen_drawing && undo {
+            self.pen.nodos.pop();
+            (false, false)
+        } else {
+            (undo, redo)
+        };
+        // Durante un gesto, Esc lo cancela y deshacer espera a que termine.
+        let (undo, redo) = if self.gesto_nodo.is_some() {
+            (false, false)
+        } else if self.gesto.is_some() {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.gesto = None;
+            }
+            (false, false)
+        } else {
+            (undo, redo)
+        };
+        if pen_drawing {
             let (enter, escape, back) = ctx.input_mut(|i| {
                 (
                     i.consume_key(Modifiers::NONE, Key::Enter),
@@ -430,9 +496,84 @@ impl Editor {
             if let Some(op) = op {
                 apply_proyecto(doc, op);
             }
-            if delete {
+            if delete && self.tool == Tool::Nodes && !self.nodos_sel.is_empty() {
+                if let Some(i) = self.nodos_obj {
+                    let ids = std::mem::take(&mut self.nodos_sel);
+                    doc.edit_nodes(i, |subs| nodos::borrar(subs, &ids));
+                }
+            } else if delete && self.fondo_sel {
+                doc.edit(|p| p.fondo = None);
+                self.fondo_sel = false;
+            } else if delete {
                 doc.remove_selected();
             }
+        }
+        self.clipboard_shortcuts(ctx);
+    }
+
+    /// Ctrl+C/X/V (egui los entrega como eventos), Ctrl+D, Ctrl+A y Esc en proyectos.
+    fn clipboard_shortcuts(&mut self, ctx: &egui::Context) {
+        let Some(doc) = &mut self.proyecto else {
+            return;
+        };
+        let (copy, cut, paste, in_place, duplicate, all, escape) = ctx.input_mut(|i| {
+            let mut copy = false;
+            let mut cut = false;
+            let mut paste = None;
+            for e in &i.events {
+                match e {
+                    egui::Event::Copy => copy = true,
+                    egui::Event::Cut => cut = true,
+                    egui::Event::Paste(text) => paste = Some(text.clone()),
+                    _ => {}
+                }
+            }
+            (
+                copy,
+                cut,
+                paste,
+                i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::V),
+                i.consume_key(Modifiers::COMMAND, Key::D),
+                i.consume_key(Modifiers::COMMAND, Key::A),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+            )
+        });
+        if (copy || cut) && !doc.selection().is_empty() {
+            ctx.copy_text(bordado::copiar_objetos(&doc.selected_objects()));
+            if cut {
+                doc.remove_selected();
+            }
+        }
+        // Ctrl+Shift+V no es un evento de pegar: se pide el portapapeles y llega después.
+        if in_place {
+            self.paste_in_place = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+        if let Some(text) = paste {
+            // Al puntero si está sobre el lienzo; con Ctrl+Shift+V, en el mismo lugar.
+            let centro = if self.paste_in_place {
+                None
+            } else {
+                self.pointer_mm
+            };
+            self.paste_in_place = false;
+            if let Some(objetos) = bordado::pegar_objetos(&text) {
+                doc.paste(objetos, centro);
+                self.fondo_sel = false;
+            }
+        }
+        if duplicate {
+            doc.duplicate_selected();
+        }
+        if all {
+            doc.select_all();
+            self.fondo_sel = false;
+        }
+        if escape && !self.nodos_sel.is_empty() {
+            self.nodos_sel.clear();
+        } else if escape {
+            doc.seleccion.fill(false);
+            self.fondo_sel = false;
         }
     }
 
@@ -746,7 +887,11 @@ impl Editor {
                     .suffix(" mm"),
             );
         });
-        ui.small("También: flechas del teclado, o Shift + arrastrar en el lienzo");
+        ui.small(if self.proyecto.is_some() {
+            "También: flechas del teclado, o arrastrar en el lienzo (manijas: escalar y girar)"
+        } else {
+            "También: flechas del teclado, o Shift + arrastrar en el lienzo"
+        });
         ui.horizontal(|ui| {
             if ui.button("⟲ 90°").clicked() {
                 op = Some(Op::Rotate(-90.0));
@@ -965,6 +1110,12 @@ impl eframe::App for Editor {
                 self.playing = false;
             }
             ctx.request_repaint();
+        }
+        // Una edición agrupada (arrastrar un valor, escribir) termina al soltar el ratón y
+        // dejar el campo: la siguiente, aunque sea del mismo campo, es otro deshacer.
+        let idle = ctx.input(|i| !i.pointer.any_down()) && ctx.memory(|m| m.focused()).is_none();
+        if idle && let Some(doc) = &mut self.proyecto {
+            doc.end_group();
         }
         self.update_title(ctx);
         self.load_fondo(ctx);

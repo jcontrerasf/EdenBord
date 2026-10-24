@@ -7,6 +7,8 @@ use eframe::egui::{
 };
 use jef::{Bounds, Jef, StitchKind};
 
+use crate::gestos::{self, Blanco, Gesto, Tipo};
+use crate::nodos::{self, Lado};
 use crate::{Editor, Tool};
 
 pub(crate) const SELECTION_COLOR: Color32 = Color32::from_rgb(30, 110, 230);
@@ -18,6 +20,12 @@ const GRID_STEPS: [f64; 5] = [1.0, 5.0, 10.0, 50.0, 100.0];
 const GRID_MIN_PX: f32 = 8.0;
 /// Distancia en píxeles para elegir una línea con el clic.
 const PICK_PX: f32 = 6.0;
+/// Margen en píxeles entre la selección y su marco.
+const FRAME_PX: f32 = 4.0;
+/// Distancia en píxeles para tomar una manija.
+const HANDLE_PX: f32 = 7.0;
+/// Altura en píxeles de la manija de giro sobre el marco.
+const ROTATE_PX: f32 = 20.0;
 
 /// Conversión entre coordenadas del diseño y de pantalla.
 #[derive(Clone, Copy)]
@@ -36,6 +44,11 @@ impl Vista {
     /// Punto en mm a pantalla.
     fn mm(&self, p: kurbo::Point) -> Pos2 {
         self.origin + Vec2::new(p.x as f32, p.y as f32) * (10.0 * self.scale)
+    }
+
+    /// Rectángulo en mm a pantalla.
+    fn rect(&self, r: kurbo::Rect) -> Rect {
+        Rect::from_two_pos(self.mm(r.origin()), self.mm((r.x1, r.y1).into()))
     }
 
     fn to_mm(self, pos: Pos2) -> kurbo::Point {
@@ -68,6 +81,11 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tool, Tool::Select, "🖱 Seleccionar");
                     if self.proyecto.is_some() {
+                        ui.selectable_value(&mut self.tool, Tool::Nodes, "⬚ Nodos")
+                            .on_hover_text(
+                                "N · arrastrar nodos y manijas · doble clic en el trazo: \
+                                 agregar nodo · Supr: borrar nodo",
+                            );
                         ui.selectable_value(&mut self.tool, Tool::Pen, "✒ Pluma");
                     }
                     ui.selectable_value(&mut self.tool, Tool::Ruler, "📏 Regla")
@@ -91,7 +109,7 @@ impl Editor {
     fn tool_drags(&self) -> bool {
         match self.tool {
             Tool::Select => false,
-            Tool::Pen => self.proyecto.is_some(),
+            Tool::Pen | Tool::Nodes => self.proyecto.is_some(),
             Tool::Ruler => true,
         }
     }
@@ -133,8 +151,15 @@ impl Editor {
         }
     }
 
-    /// Ajuste inicial, desplazamiento (si no se está moviendo la selección) y zoom.
-    fn view_controls(&mut self, ui: &egui::Ui, response: &Response, fit: Bounds) -> Vista {
+    /// Ajuste inicial, desplazamiento y zoom. La vista se mueve con el botón central o derecho,
+    /// o con Espacio + arrastrar; con `primary_pans` (JEF) también con el arrastre principal.
+    fn view_controls(
+        &mut self,
+        ui: &egui::Ui,
+        response: &Response,
+        fit: Bounds,
+        primary_pans: bool,
+    ) -> Vista {
         let rect = response.rect;
         if self.fit_pending {
             let w = fit.width().max(10) as f32;
@@ -147,9 +172,14 @@ impl Editor {
             self.pan = -mid * self.scale;
             self.fit_pending = false;
         }
+        use egui::PointerButton::{Middle, Primary, Secondary};
+        let space = ui.input(|i| i.key_down(egui::Key::Space));
         // Con la pluma o la regla, el arrastre principal es de la herramienta: no mueve la vista.
-        let tool_drag = self.tool_drags() && response.dragged_by(egui::PointerButton::Primary);
-        if !self.moving && !tool_drag {
+        let primary = primary_pans && !self.moving && !self.tool_drags();
+        if response.dragged_by(Middle)
+            || response.dragged_by(Secondary)
+            || (response.dragged_by(Primary) && (space || primary))
+        {
             self.pan += response.drag_delta();
         }
 
@@ -208,7 +238,7 @@ impl Editor {
                 doc.sync();
             }
         }
-        let vista = self.view_controls(ui, response, fit);
+        let vista = self.view_controls(ui, response, fit, true);
         if self.show_grid {
             draw_grid(painter, vista, response.rect);
         }
@@ -227,6 +257,7 @@ impl Editor {
             |b| doc.visible[b],
             progress,
             self.show_jumps,
+            None,
         );
 
         // Marco de la selección.
@@ -318,7 +349,6 @@ impl Editor {
     }
 
     fn canvas_proyecto(&mut self, ui: &egui::Ui, response: &Response, painter: &egui::Painter) {
-        let (started, delta) = self.selection_drag(ui, response);
         let mut fit = self.proyecto.as_ref().unwrap().bounds();
         if let Some(r) = self.fondo_rect() {
             fit.min_x = fit.min_x.min((r.x0 * 10.0) as i32);
@@ -326,46 +356,30 @@ impl Editor {
             fit.max_x = fit.max_x.max((r.x1 * 10.0) as i32);
             fit.max_y = fit.max_y.max((r.y1 * 10.0) as i32);
         }
-        if started {
-            self.proyecto.as_mut().unwrap().checkpoint();
-        }
-        let vista = self.view_controls(ui, response, fit);
-        if self.tool == Tool::Pen {
-            self.pen_input(ui, response, vista);
-        }
-        let doc = self.proyecto.as_mut().unwrap();
-        if delta != Vec2::ZERO {
-            let d = delta / (10.0 * vista.scale);
-            let sel = doc.selection();
-            doc.translate(&sel, f64::from(d.x), f64::from(d.y));
-        }
-
-        // Clic: elegir objeto; Ctrl+clic: agregar o quitar de la selección.
-        if self.tool == Tool::Select
-            && response.clicked()
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let tol = f64::from(PICK_PX / (10.0 * vista.scale));
-            let hit = doc.object_at(vista.to_mm(pos), tol);
-            let ctrl = ui.input(|i| i.modifiers.command);
-            match (hit, ctrl) {
-                (Some(i), true) => doc.seleccion[i] = !doc.seleccion[i],
-                (Some(i), false) => {
-                    doc.seleccion.fill(false);
-                    doc.seleccion[i] = true;
-                }
-                (None, false) => doc.seleccion.fill(false),
-                (None, true) => {}
-            }
+        let vista = self.view_controls(ui, response, fit, false);
+        match self.tool {
+            Tool::Pen => self.pen_input(ui, response, vista),
+            Tool::Select => self.select_input(ui, response, vista),
+            Tool::Nodes => self.nodes_input(ui, response, vista),
+            Tool::Ruler => {}
         }
 
         let doc = self.proyecto.as_ref().unwrap();
-        if let Some(r) = self.fondo_rect()
+        // Transformación en curso de los objetos seleccionados (se aplica al soltar).
+        let preview = match self.gesto {
+            Some(Gesto::Transformar {
+                blanco: Blanco::Objetos,
+                af,
+                ..
+            }) => Some(af),
+            _ => None,
+        };
+        if let Some(r) = self.fondo_rect_preview()
             && doc.proyecto.fondo.as_ref().is_some_and(|f| f.visible)
             && let Some((_, Some(tex))) = &self.fondo_tex
         {
             let alpha = doc.proyecto.fondo.as_ref().map_or(1.0, |f| f.opacidad);
-            let screen = Rect::from_two_pos(vista.mm(r.origin()), vista.mm((r.x1, r.y1).into()));
+            let screen = vista.rect(r);
             let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
             painter.image(tex.id(), screen, uv, Color32::WHITE.gamma_multiply(alpha));
         }
@@ -378,6 +392,15 @@ impl Editor {
         }
         let progress = self.progress.min(jef.stitches.len());
         let blocks = jef.color_blocks();
+        let moved = preview.map(|af| {
+            let mut m = vec![false; jef.stitches.len()];
+            for i in doc.selection() {
+                if let Some(r) = doc.generado.rangos.get(i) {
+                    m[r.clone()].fill(true);
+                }
+            }
+            (m, af)
+        });
         draw_stitches(
             painter,
             vista,
@@ -386,6 +409,7 @@ impl Editor {
             |_| true,
             progress,
             self.show_jumps,
+            moved.as_ref().map(|(m, af)| (m.as_slice(), *af)),
         );
 
         // Contornos: guías siempre; los demás solo si se piden o están seleccionados.
@@ -404,26 +428,627 @@ impl Editor {
             } else {
                 continue;
             };
+            let af = if doc.seleccion[i] {
+                preview.unwrap_or(kurbo::Affine::IDENTITY)
+            } else {
+                kurbo::Affine::IDENTITY
+            };
             for pl in &doc.lineas[i] {
-                let mut pts: Vec<Pos2> = pl.puntos.iter().map(|&p| vista.mm(p)).collect();
+                let mut pts: Vec<Pos2> = pl.puntos.iter().map(|&p| vista.mm(af * p)).collect();
                 if pl.cerrada {
                     pts.push(pts[0]);
                 }
                 painter.add(Shape::line(pts, stroke));
             }
         }
-        if let Some(r) = doc.selection_rect() {
-            let r = Rect::from_two_pos(vista.mm(r.origin()), vista.mm((r.x1, r.y1).into()));
-            draw_selection_frame(painter, r);
+        if self.tool == Tool::Select
+            && let Some((r, completo)) = self.handles_rect(vista)
+        {
+            draw_handles(painter, r, completo);
+        } else if self.tool == Tool::Nodes {
+            self.draw_nodes(painter, vista);
+        } else if let Some(r) = doc.selection_rect() {
+            draw_selection_frame(painter, vista.rect(r).expand(FRAME_PX));
         }
         draw_needle(painter, vista, jef, progress);
         if self.tool == Tool::Pen {
             self.draw_pen(painter, response, vista);
         }
+        self.draw_gesture(painter, response, vista);
+        if let Some(GestoNodo::Caja { a, b, .. }) = self.gesto_nodo {
+            draw_box(painter, Rect::from_two_pos(vista.mm(a), vista.mm(b)));
+        }
         self.overlays(ui, response, painter, vista);
+    }
+
+    /// Rectángulo (mm) del fondo con el gesto en curso aplicado.
+    fn fondo_rect_preview(&self) -> Option<kurbo::Rect> {
+        let r = self.fondo_rect()?;
+        Some(match self.gesto {
+            Some(Gesto::Transformar {
+                blanco: Blanco::Fondo,
+                af,
+                ..
+            }) => af.transform_rect_bbox(r),
+            _ => r,
+        })
+    }
+
+    /// Lo que tiene manijas (la selección o el fondo): su rectángulo en mm y a qué se aplica.
+    fn target_rect(&self) -> Option<(kurbo::Rect, Blanco)> {
+        if self.fondo_sel {
+            return Some((self.fondo_rect()?, Blanco::Fondo));
+        }
+        Some((self.proyecto.as_ref()?.selection_rect()?, Blanco::Objetos))
+    }
+
+    /// Marco de las manijas en pantalla (con el gesto aplicado) y si lleva lados y giro.
+    fn handles_rect(&self, vista: Vista) -> Option<(Rect, bool)> {
+        if matches!(self.gesto, Some(Gesto::Caja { .. })) {
+            return None;
+        }
+        let (r, blanco) = self.target_rect()?;
+        let r = match self.gesto {
+            Some(Gesto::Transformar { af, .. }) => af.transform_rect_bbox(r),
+            _ => r,
+        };
+        Some((vista.rect(r).expand(FRAME_PX), blanco == Blanco::Objetos))
+    }
+
+    /// Qué hay bajo el puntero, en orden de prioridad.
+    fn pick(&self, vista: Vista, pos: Pos2) -> Pick {
+        if let Some((r, completo)) = self.handles_rect(vista)
+            && let Some(tipo) = handles(r, completo)
+                .into_iter()
+                .find(|(_, p)| p.distance(pos) <= HANDLE_PX)
+                .map(|(t, _)| t)
+        {
+            return Pick::Manija(tipo);
+        }
+        let doc = self.proyecto.as_ref().unwrap();
+        let p = vista.to_mm(pos);
+        let tol = f64::from(PICK_PX / (10.0 * vista.scale));
+        if let Some(i) = doc.object_at(p, tol) {
+            return if doc.seleccion[i] {
+                Pick::Seleccion
+            } else {
+                Pick::Objeto(i)
+            };
+        }
+        if let Some((r, blanco)) = self.target_rect()
+            && vista.rect(r).expand(FRAME_PX).contains(pos)
+        {
+            return match blanco {
+                Blanco::Objetos => Pick::Seleccion,
+                Blanco::Fondo => Pick::Fondo,
+            };
+        }
+        let fondo_libre = doc
+            .proyecto
+            .fondo
+            .as_ref()
+            .is_some_and(|f| f.visible && !f.bloqueado);
+        if fondo_libre && self.fondo_rect().is_some_and(|r| r.contains(p)) {
+            return Pick::Fondo;
+        }
+        Pick::Nada
+    }
+
+    /// Herramienta de selección: clic elige, arrastrar mueve, las manijas escalan y giran, y
+    /// arrastrar en el vacío selecciona con un rectángulo.
+    fn select_input(&mut self, ui: &egui::Ui, response: &Response, vista: Vista) {
+        use egui::PointerButton::Primary;
+        let (space, mods) = ui.input(|i| {
+            let m = gestos::Mods {
+                shift: i.modifiers.shift,
+                ctrl: i.modifiers.command,
+            };
+            (i.key_down(egui::Key::Space), m)
+        });
+        let sumar = mods.shift || mods.ctrl;
+        // Una selección hecha en el panel deja de lado el fondo.
+        if self
+            .proyecto
+            .as_ref()
+            .is_some_and(|d| !d.selection().is_empty())
+        {
+            self.fondo_sel = false;
+        }
+        let fondo_libre = self
+            .proyecto
+            .as_ref()
+            .and_then(|d| d.proyecto.fondo.as_ref())
+            .is_some_and(|f| f.visible && !f.bloqueado);
+        if self.fondo_sel && (!fondo_libre || self.fondo_rect().is_none()) {
+            self.fondo_sel = false;
+        }
+
+        if space {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else if self.gesto.is_none()
+            && let Some(pos) = response.hover_pos()
+        {
+            let icon = match self.pick(vista, pos) {
+                Pick::Manija(t) => handle_cursor(t),
+                Pick::Seleccion | Pick::Objeto(_) => egui::CursorIcon::Move,
+                Pick::Fondo if self.fondo_sel => egui::CursorIcon::Move,
+                _ => egui::CursorIcon::Default,
+            };
+            ui.ctx().set_cursor_icon(icon);
+        }
+
+        if response.drag_started_by(Primary)
+            && !space
+            && let Some(o) = ui.input(|i| i.pointer.press_origin())
+        {
+            let desde = vista.to_mm(o);
+            let pick = self.pick(vista, o);
+            let doc = self.proyecto.as_mut().unwrap();
+            match pick {
+                Pick::Objeto(i) => {
+                    if !sumar {
+                        doc.seleccion.fill(false);
+                    }
+                    doc.seleccion[i] = true;
+                    self.fondo_sel = false;
+                }
+                Pick::Fondo if !self.fondo_sel => {
+                    doc.seleccion.fill(false);
+                    self.fondo_sel = true;
+                }
+                _ => {}
+            }
+            let tipo = match pick {
+                Pick::Manija(t) => Some(t),
+                Pick::Seleccion | Pick::Objeto(_) | Pick::Fondo => Some(Tipo::Mover),
+                Pick::Nada => None,
+            };
+            self.gesto = match (tipo, self.target_rect()) {
+                (Some(tipo), Some((r0, blanco))) => Some(Gesto::Transformar {
+                    blanco,
+                    tipo,
+                    r0,
+                    desde,
+                    af: kurbo::Affine::IDENTITY,
+                }),
+                _ => Some(Gesto::Caja {
+                    a: desde,
+                    b: desde,
+                    sumar,
+                }),
+            };
+        }
+        if response.dragged_by(Primary)
+            && let (Some(g), Some(pos)) = (&mut self.gesto, response.interact_pointer_pos())
+        {
+            g.arrastrar(vista.to_mm(pos), mods);
+        }
+        if response.drag_stopped() {
+            self.finish_gesture();
+        }
+
+        // Clic: elegir objeto (o el fondo); Ctrl o Shift: agregar o quitar de la selección.
+        if response.clicked_by(Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+            && let pick = self.pick(vista, pos)
+            && !matches!(pick, Pick::Manija(_))
+        {
+            let doc = self.proyecto.as_mut().unwrap();
+            let p = vista.to_mm(pos);
+            let tol = f64::from(PICK_PX / (10.0 * vista.scale));
+            match (doc.object_at(p, tol), sumar) {
+                (Some(i), true) => doc.seleccion[i] = !doc.seleccion[i],
+                (Some(i), false) => {
+                    doc.seleccion.fill(false);
+                    doc.seleccion[i] = true;
+                }
+                (None, false) => {
+                    doc.seleccion.fill(false);
+                    self.fondo_sel = pick == Pick::Fondo;
+                }
+                (None, true) => {}
+            }
+        }
+    }
+
+    /// Aplica el gesto terminado (un solo punto de deshacer).
+    pub(crate) fn finish_gesture(&mut self) {
+        let (Some(g), Some(doc)) = (self.gesto.take(), self.proyecto.as_mut()) else {
+            return;
+        };
+        match g {
+            Gesto::Transformar {
+                blanco: Blanco::Objetos,
+                af,
+                ..
+            } => {
+                let sel = doc.selection();
+                doc.transform_affine(&sel, af);
+            }
+            Gesto::Transformar {
+                blanco: Blanco::Fondo,
+                af,
+                r0,
+                ..
+            } => {
+                if af != kurbo::Affine::IDENTITY {
+                    let r = af.transform_rect_bbox(r0);
+                    doc.edit_fondo(|f| {
+                        f.centro = [r.center().x, r.center().y];
+                        f.ancho = r.width();
+                    });
+                }
+            }
+            Gesto::Caja { a, b, sumar } => {
+                let dentro = doc.objects_in(kurbo::Rect::from_points(a, b));
+                if !sumar {
+                    doc.seleccion.fill(false);
+                }
+                for &i in &dentro {
+                    doc.seleccion[i] = true;
+                }
+                if !dentro.is_empty() || !sumar {
+                    self.fondo_sel = false;
+                }
+            }
+        }
+    }
+
+    /// Nodos del objeto en edición (`None` si no hay uno editable) y limpia la selección de
+    /// nodos si cambió el objeto o dejaron de existir.
+    fn edited_nodes(&mut self) -> Option<(usize, Vec<nodos::Sub>)> {
+        let doc = self.proyecto.as_ref()?;
+        let editable = doc.editable();
+        if editable != self.nodos_obj {
+            self.nodos_obj = editable;
+            self.nodos_sel.clear();
+        }
+        let i = editable?;
+        let subs = doc.nodes(i)?;
+        self.nodos_sel
+            .retain(|&id| nodos::nodo(&subs, id).is_some());
+        Some((i, subs))
+    }
+
+    /// Nodo o manija (de un nodo seleccionado) bajo el puntero.
+    fn node_at(&self, subs: &[nodos::Sub], vista: Vista, pos: Pos2) -> Option<NodeHit> {
+        for &id in &self.nodos_sel {
+            let n = nodos::nodo(subs, id)?;
+            for (lado, q) in [(Lado::Entrada, n.entrada), (Lado::Salida, n.salida)] {
+                if q.distance(n.p) > 1e-6 && vista.mm(q).distance(pos) <= HANDLE_PX {
+                    return Some(NodeHit::Manija(id, lado));
+                }
+            }
+        }
+        nodos::todos(subs)
+            .filter_map(|id| Some((id, vista.mm(nodos::nodo(subs, id)?.p).distance(pos))))
+            .filter(|&(_, d)| d <= HANDLE_PX)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| NodeHit::Nodo(id))
+    }
+
+    /// Herramienta de nodos: clic elige nodo (Shift/Ctrl agrega), arrastrar mueve nodos o
+    /// manijas, arrastrar en el vacío selecciona nodos con un rectángulo, doble clic en el
+    /// trazo agrega un nodo. Clic en otro objeto lo elige para editarlo.
+    fn nodes_input(&mut self, ui: &egui::Ui, response: &Response, vista: Vista) {
+        use egui::PointerButton::Primary;
+        let (space, sumar) = ui.input(|i| {
+            (
+                i.key_down(egui::Key::Space),
+                i.modifiers.shift || i.modifiers.command,
+            )
+        });
+        let edited = self.edited_nodes();
+        let hit = |s: &Self, pos: Pos2| {
+            edited
+                .as_ref()
+                .and_then(|(_, subs)| s.node_at(subs, vista, pos))
+        };
+        if !space
+            && self.gesto_nodo.is_none()
+            && let Some(pos) = response.hover_pos()
+            && hit(self, pos).is_some()
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+        }
+
+        if response.drag_started_by(Primary)
+            && !space
+            && let Some(o) = ui.input(|i| i.pointer.press_origin())
+        {
+            let desde = vista.to_mm(o);
+            self.gesto_nodo = match hit(self, o) {
+                Some(NodeHit::Manija(id, lado)) => {
+                    self.proyecto.as_mut().unwrap().checkpoint();
+                    Some(GestoNodo::Manija { id, lado })
+                }
+                Some(NodeHit::Nodo(id)) => {
+                    if !self.nodos_sel.contains(&id) {
+                        if !sumar {
+                            self.nodos_sel.clear();
+                        }
+                        self.nodos_sel.push(id);
+                    }
+                    self.proyecto.as_mut().unwrap().checkpoint();
+                    Some(GestoNodo::Mover { ultimo: desde })
+                }
+                None => Some(GestoNodo::Caja {
+                    a: desde,
+                    b: desde,
+                    sumar,
+                }),
+            };
+        }
+        if response.dragged_by(Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+            && let Some((i, mut subs)) = edited.clone()
+        {
+            let p = vista.to_mm(pos);
+            let doc = self.proyecto.as_mut().unwrap();
+            match &mut self.gesto_nodo {
+                Some(GestoNodo::Mover { ultimo }) => {
+                    nodos::mover(&mut subs, &self.nodos_sel, p - *ultimo);
+                    *ultimo = p;
+                    doc.set_nodes_live(i, &subs);
+                }
+                Some(GestoNodo::Manija { id, lado }) => {
+                    nodos::mover_manija(&mut subs, *id, *lado, p);
+                    doc.set_nodes_live(i, &subs);
+                }
+                Some(GestoNodo::Caja { b, .. }) => *b = p,
+                None => {}
+            }
+        }
+        if let Some(GestoNodo::Caja { b, .. }) = &mut self.gesto_nodo
+            && edited.is_none()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            *b = vista.to_mm(pos);
+        }
+        if response.drag_stopped()
+            && let Some(g) = self.gesto_nodo.take()
+        {
+            match g {
+                GestoNodo::Mover { .. } | GestoNodo::Manija { .. } => {
+                    self.proyecto.as_mut().unwrap().sync();
+                }
+                GestoNodo::Caja { a, b, sumar } => {
+                    let r = kurbo::Rect::from_points(a, b);
+                    if !sumar {
+                        self.nodos_sel.clear();
+                    }
+                    if let Some((_, subs)) = &edited {
+                        for id in nodos::todos(subs) {
+                            if nodos::nodo(subs, id).is_some_and(|n| r.contains(n.p))
+                                && !self.nodos_sel.contains(&id)
+                            {
+                                self.nodos_sel.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if response.double_clicked_by(Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+            && let Some((i, subs)) = &edited
+            && hit(self, pos).is_none()
+            && let Some((s, k, t, d)) = nodos::segmento_cercano(subs, vista.to_mm(pos))
+            && d <= f64::from(PICK_PX / (10.0 * vista.scale))
+        {
+            let mut nuevo = None;
+            self.proyecto.as_mut().unwrap().edit_nodes(*i, |subs| {
+                nuevo = Some(nodos::insertar(subs, s, k, t));
+                true
+            });
+            self.nodos_sel = nuevo.into_iter().collect();
+        } else if response.clicked_by(Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            match hit(self, pos) {
+                Some(NodeHit::Nodo(id)) => {
+                    let ya = self.nodos_sel.contains(&id);
+                    if sumar && ya {
+                        self.nodos_sel.retain(|&x| x != id);
+                    } else if !sumar {
+                        self.nodos_sel = vec![id];
+                    } else {
+                        self.nodos_sel.push(id);
+                    }
+                }
+                Some(NodeHit::Manija(..)) => {}
+                None => {
+                    // Otro objeto: pasa a editarse; el vacío suelta los nodos y luego el objeto.
+                    let doc = self.proyecto.as_mut().unwrap();
+                    let tol = f64::from(PICK_PX / (10.0 * vista.scale));
+                    match doc.object_at(vista.to_mm(pos), tol) {
+                        Some(o) if Some(o) != self.nodos_obj => {
+                            doc.seleccion.fill(false);
+                            doc.seleccion[o] = true;
+                        }
+                        Some(_) => {}
+                        None if self.nodos_sel.is_empty() && !sumar => doc.seleccion.fill(false),
+                        None => {
+                            if !sumar {
+                                self.nodos_sel.clear();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_nodes(&self, painter: &egui::Painter, vista: Vista) {
+        let Some(subs) = self.proyecto.as_ref().and_then(|d| d.nodes(d.editable()?)) else {
+            return;
+        };
+        let stroke = Stroke::new(1.5, SELECTION_COLOR);
+        let thin = Stroke::new(1.0, SELECTION_COLOR);
+        for &id in &self.nodos_sel {
+            let Some(n) = nodos::nodo(&subs, id) else {
+                continue;
+            };
+            for q in [n.entrada, n.salida] {
+                if q.distance(n.p) > 1e-6 {
+                    painter.line_segment([vista.mm(n.p), vista.mm(q)], thin);
+                    painter.circle(vista.mm(q), 3.5, Color32::WHITE, stroke);
+                }
+            }
+        }
+        for id in nodos::todos(&subs) {
+            let n = nodos::nodo(&subs, id).unwrap();
+            let p = vista.mm(n.p);
+            let fill = if self.nodos_sel.contains(&id) {
+                SELECTION_COLOR
+            } else {
+                Color32::WHITE
+            };
+            if n.es_esquina() {
+                let q = Rect::from_center_size(p, Vec2::splat(7.0));
+                painter.rect(q, 0.0, fill, stroke, egui::StrokeKind::Middle);
+            } else {
+                painter.circle(p, 4.0, fill, stroke);
+            }
+        }
+    }
+
+    /// Rectángulo de selección y medidas del gesto junto al puntero.
+    fn draw_gesture(&self, painter: &egui::Painter, response: &Response, vista: Vista) {
+        let Some(g) = self.gesto else {
+            return;
+        };
+        let text = match g {
+            Gesto::Caja { a, b, .. } => {
+                draw_box(painter, Rect::from_two_pos(vista.mm(a), vista.mm(b)));
+                return;
+            }
+            Gesto::Transformar { tipo, r0, af, .. } => match tipo {
+                Tipo::Mover => {
+                    let d = af.translation();
+                    format!("Δx {:.1}  Δy {:.1} mm", d.x, d.y)
+                }
+                Tipo::Escalar(..) => {
+                    let r = af.transform_rect_bbox(r0);
+                    let pct = if r0.width() > 1e-9 {
+                        r.width() / r0.width()
+                    } else {
+                        r.height() / r0.height().max(1e-9)
+                    } * 100.0;
+                    format!("{:.1} × {:.1} mm  ({pct:.0} %)", r.width(), r.height())
+                }
+                Tipo::Girar => {
+                    let [a, b, ..] = af.as_coeffs();
+                    format!("{:.1}°", b.atan2(a).to_degrees())
+                }
+            },
+        };
+        if let Some(pos) = response.hover_pos().or(response.interact_pointer_pos()) {
+            let at = pos + Vec2::new(14.0, 14.0);
+            let galley = painter.layout_no_wrap(text, FontId::proportional(13.0), Color32::WHITE);
+            let bg = Rect::from_min_size(at, galley.size()).expand(3.0);
+            painter.rect_filled(bg, 3.0, Color32::from_black_alpha(170));
+            painter.galley(at, galley, Color32::WHITE);
+        }
     }
 }
 
+/// Arrastre con la herramienta de nodos.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum GestoNodo {
+    /// Mueve los nodos seleccionados; `ultimo` = posición anterior del puntero (mm).
+    Mover {
+        ultimo: kurbo::Point,
+    },
+    Manija {
+        id: nodos::Id,
+        lado: Lado,
+    },
+    Caja {
+        a: kurbo::Point,
+        b: kurbo::Point,
+        sumar: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum NodeHit {
+    Nodo(nodos::Id),
+    Manija(nodos::Id, Lado),
+}
+
+/// Lo que hay bajo el puntero con la herramienta de selección.
+#[derive(Clone, Copy, PartialEq)]
+enum Pick {
+    Manija(Tipo),
+    /// Un objeto seleccionado o el interior del marco de la selección.
+    Seleccion,
+    Objeto(usize),
+    Fondo,
+    Nada,
+}
+
+/// Manijas de un marco en pantalla: esquinas y, con `completo`, lados y giro.
+fn handles(r: Rect, completo: bool) -> Vec<(Tipo, Pos2)> {
+    let mut v = vec![
+        (Tipo::Escalar(-1, -1), r.left_top()),
+        (Tipo::Escalar(1, -1), r.right_top()),
+        (Tipo::Escalar(1, 1), r.right_bottom()),
+        (Tipo::Escalar(-1, 1), r.left_bottom()),
+    ];
+    if completo {
+        v.extend([
+            (Tipo::Escalar(0, -1), r.center_top()),
+            (Tipo::Escalar(1, 0), r.right_center()),
+            (Tipo::Escalar(0, 1), r.center_bottom()),
+            (Tipo::Escalar(-1, 0), r.left_center()),
+            (Tipo::Girar, r.center_top() - Vec2::new(0.0, ROTATE_PX)),
+        ]);
+    }
+    v
+}
+
+fn handle_cursor(t: Tipo) -> egui::CursorIcon {
+    use egui::CursorIcon as C;
+    match t {
+        Tipo::Escalar(0, _) => C::ResizeVertical,
+        Tipo::Escalar(_, 0) => C::ResizeHorizontal,
+        Tipo::Escalar(x, y) if x == y => C::ResizeNwSe,
+        Tipo::Escalar(..) => C::ResizeNeSw,
+        Tipo::Girar => C::Alias,
+        Tipo::Mover => C::Move,
+    }
+}
+
+fn draw_box(painter: &egui::Painter, r: Rect) {
+    painter.rect_filled(r, 0.0, SELECTION_COLOR.gamma_multiply(0.12));
+    painter.rect_stroke(
+        r,
+        0.0,
+        Stroke::new(1.0, SELECTION_COLOR),
+        egui::StrokeKind::Middle,
+    );
+}
+
+fn draw_handles(painter: &egui::Painter, r: Rect, completo: bool) {
+    draw_selection_frame(painter, r);
+    let stroke = Stroke::new(1.5, SELECTION_COLOR);
+    if completo {
+        painter.line_segment(
+            [r.center_top(), r.center_top() - Vec2::new(0.0, ROTATE_PX)],
+            stroke,
+        );
+    }
+    for (t, p) in handles(r, completo) {
+        if t == Tipo::Girar {
+            painter.circle(p, 4.5, Color32::WHITE, stroke);
+        } else {
+            let q = Rect::from_center_size(p, Vec2::splat(7.0));
+            painter.rect(q, 0.0, Color32::WHITE, stroke, egui::StrokeKind::Middle);
+        }
+    }
+}
 /// Paso de la cuadrícula (mm) para una escala en píxeles por mm.
 fn grid_step(px_per_mm: f32) -> f64 {
     GRID_STEPS
@@ -538,7 +1163,9 @@ fn draw_hoop(painter: &egui::Painter, vista: Vista, jef: &Jef) {
     painter.line_segment([vista.p(0, -30), vista.p(0, 30)], thin);
 }
 
-/// Dibuja las primeras `progress` entradas de los bloques visibles.
+/// Dibuja las primeras `progress` entradas de los bloques visibles. `moved`: entradas que se
+/// dibujan con una transformación (mm), la vista previa de un gesto.
+#[allow(clippy::too_many_arguments)]
 fn draw_stitches(
     painter: &egui::Painter,
     vista: Vista,
@@ -547,7 +1174,17 @@ fn draw_stitches(
     visible: impl Fn(usize) -> bool,
     progress: usize,
     show_jumps: bool,
+    moved: Option<(&[bool], kurbo::Affine)>,
 ) {
+    let pt = |i: usize| {
+        let s = jef.stitches[i];
+        match moved {
+            Some((m, af)) if m[i] => {
+                vista.mm(af * kurbo::Point::new(f64::from(s.x) / 10.0, f64::from(s.y) / 10.0))
+            }
+            _ => vista.p(s.x, s.y),
+        }
+    };
     // Grosor aproximado de un hilo (0,4 mm), con un mínimo para que se vea al alejar.
     let width = (4.0 * vista.scale).clamp(0.6, 6.0);
     let jump_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(40, 40, 40, 160));
@@ -562,26 +1199,16 @@ fn draw_stitches(
         let mut run: Vec<Pos2> = Vec::new();
         for i in block.start..end {
             let s = jef.stitches[i];
-            let p = vista.p(s.x, s.y);
+            let p = pt(i);
             if s.kind == StitchKind::Normal {
                 if run.is_empty() {
-                    let prev = i.checked_sub(1).map_or((0, 0), |k| {
-                        let s = jef.stitches[k];
-                        (s.x, s.y)
-                    });
-                    run.push(vista.p(prev.0, prev.1));
+                    run.push(i.checked_sub(1).map_or(vista.p(0, 0), pt));
                 }
                 push_point(&mut shapes, &mut run, p, stroke);
             } else {
                 flush_run(&mut shapes, &mut run, stroke);
                 if show_jumps && s.kind == StitchKind::Jump && i > 0 {
-                    let prev = jef.stitches[i - 1];
-                    shapes.extend(Shape::dashed_line(
-                        &[vista.p(prev.x, prev.y), p],
-                        jump_stroke,
-                        4.0,
-                        3.0,
-                    ));
+                    shapes.extend(Shape::dashed_line(&[pt(i - 1), p], jump_stroke, 4.0, 3.0));
                 }
             }
         }

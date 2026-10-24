@@ -110,8 +110,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   por fila. La base es el mismo relleno a +90°, ralo y metido 0,5 mm.
 - `svg.rs`: usvg (transforms, unidades, textos con fuentes del sistema) → objetos guía,
   color = `palette::nearest`, centrados en el origen. 96 px por pulgada.
-- `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible}`.
-  Imagen para calcar; no se borda. Ruta relativa = desde la carpeta del `.edenbord`.
+- `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible,
+  bloqueado}` (`bloqueado` solo se escribe si es `true`). Imagen para calcar; no se borda. Ruta
+  relativa = desde la carpeta del `.edenbord`.
+- `Generado.rangos[i]` = entradas de `jef.stitches` del objeto `i` (vista previa al arrastrar).
+- Portapapeles: `copiar_objetos`/`pegar_objetos` = JSON `{"formato":"edenbord-objetos",
+  "objetos":[…]}` en el portapapeles del sistema (sirve entre ventanas).
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
 ## App (`crates/edenbord/src`)
@@ -120,20 +124,41 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - `doc.rs`: `Doc` = diseño + visibilidad/selección por bloque + historial (100 copias del `Jef`).
   Ediciones con `doc.edit(|j| …)`; el arrastre con Shift usa `checkpoint()` una vez y luego
   `translate` directo.
-- `canvas.rs`: dibujo (común: `draw_stitches`, `Vista`), zoom/desplazamiento, arrastre de la
-  selección; en proyectos, clic elige objeto (`ProyectoDoc::object_at`).
+- `canvas.rs`: dibujo (común: `draw_stitches`, `Vista`), zoom/desplazamiento. Vista: botón
+  central/derecho o Espacio + arrastrar (en JEF también el arrastre principal; ahí la selección
+  se mueve con Shift + arrastrar). En proyectos (`select_input`, prioridad en `pick`): manijas →
+  objeto (clic elige, arrastrar mueve; Ctrl/Shift agrega) → interior del marco → fondo libre →
+  vacío = rectángulo de selección (`objects_in`, formas enteras dentro).
+- `gestos.rs`: `Editor.gesto` (`Transformar {blanco: Objetos|Fondo, tipo: Mover|Escalar(sx,sy)|
+  Girar, r0, desde, af}` o `Caja`). Durante el gesto solo se acumula `af` y se dibuja la vista
+  previa (contornos y puntadas ya generadas pasan por `af`); al soltar, un solo `edit`
+  (`transform_affine` / `edit_fondo`). Esc cancela. Esquinas proporcionales (Shift libre,
+  Ctrl desde el centro), lados un eje, giro con Shift de a 15°, mover con Ctrl recto. El fondo
+  solo tiene esquinas (ancho + centro). Funciones puras con tests (`afin_escala`, …).
+- `nodos.rs` + `Tool::Nodes`: el `BezPath` pasa a `Sub { nodos: [Nodo {p, entrada, salida}],
+  cerrado }` (todo cúbico; manija = punto ⇒ recto) y vuelve con `a_trazado` (rectas como `L`,
+  cierre recto implícito en `Z`). Arrastrar nodos: `checkpoint` al empezar,
+  `set_nodes_live` (solo polilíneas) mientras, `sync` al soltar. Doble clic = insertar,
+  Supr = borrar (mínimo 3 cerrado / 2 abierto), "Esquina ↔ curva". Textos: "Convertir en
+  trazado".
+- Atajos (`shortcuts`, `clipboard_shortcuts`; no corren si un campo tiene el foco): S/N/P/R
+  herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
+  puntero), Ctrl+Shift+V (en el mismo lugar, vía `ViewportCommand::RequestPaste`), Ctrl+D,
+  Ctrl+A, Esc, Supr (objetos, nodos o el fondo elegido), flechas.
 - Hay a lo sumo un documento abierto: `Editor.doc` (JEF) **o** `Editor.proyecto`. Abrir decide
   por extensión (`.jef`, `.edenbord`/`.bordado`, `.svg` → proyecto nuevo con guías).
-- `proyecto.rs`: `ProyectoDoc` = proyecto + selección + historial (copias del `Proyecto`) +
-  puntadas generadas y polilíneas en caché (se recalculan en `sync()` tras cada edición).
-  `edit_grouped(clave, …)` junta en un solo deshacer las ediciones continuas (arrastrar valores).
-- `pluma.rs` + `Editor.tool` (`Select`/`Pen`): clic = vértice esquina, arrastrar = vértice con
+- `proyecto.rs`: `ProyectoDoc` = proyecto + selección + historial (copias del `Proyecto` con
+  su selección, que vuelve al deshacer) + puntadas generadas y polilíneas en caché (se
+  recalculan en `sync()` tras cada edición). `edit_grouped(clave, …)` junta en un solo deshacer
+  las ediciones continuas (arrastrar valores); `logic` llama a `end_group()` cuando no hay botón
+  apretado ni campo con foco. Con la pluma, Ctrl+Z quita el último vértice.
+- `pluma.rs` + `Editor.tool` (`Select`/`Nodes`/`Pen`/`Ruler`): clic = vértice esquina, arrastrar = vértice con
   manija (simétrica, control = punto + manija), clic en el primero = zona, Enter = línea,
-  Retroceso/Esc. Con la pluma el arrastre principal no mueve la vista (rueda/botón central sí).
+  Retroceso o Ctrl+Z/Esc. Con la pluma el arrastre principal no mueve la vista.
   Los trazos nuevos entran como guías. "Combinar zonas" (`ProyectoDoc::combine`) une contornos
   en uno: los de adentro quedan como agujeros.
-- Barra sobre el lienzo (`canvas.rs::toolbar`): herramienta (`Tool::Select/Pen/Ruler`),
-  cuadrícula y posición del puntero en mm. `tool_drags()`: con pluma o regla el arrastre
+- Barra sobre el lienzo (`canvas.rs::toolbar`): herramienta (`Tool::Select/Nodes/Pen/Ruler`),
+  cuadrícula y posición del puntero en mm. `tool_drags()`: con nodos, pluma o regla el arrastre
   principal es de la herramienta, no mueve vista ni selección.
 - Cuadrícula (`draw_grid`): alineada al origen, paso adaptativo 1/5/10/50/100 mm (≥ 8 px),
   líneas fuertes cada 10 mm (o 5 pasos), ejes más oscuros. Regla: `Editor.ruler` (mm),
@@ -174,10 +199,10 @@ Hecho: lectura/escritura, visor, edición básica (mover, rotar, espejar, escala
 recolorear, reordenar, borrar, combinar, deshacer, guardar como). Proyectos `.edenbord`:
 importar SVG, convertir trazados en relleno/satín/pespunte, texto TTF, exportar JEF.
 
-Calcar: imagen de fondo + pluma + combinar zonas.
+Calcar: imagen de fondo + pluma + combinar zonas. Edición directa: manijas (escalar/girar),
+rectángulo de selección, portapapeles, duplicar, editar nodos.
 
 Ideas pendientes:
-- Editar nodos de un trazo ya creado (hoy solo se redibuja); mover/escalar el fondo con el ratón.
 - `.ai` directo (leyendo su parte PDF).
 - Satín automático en formas cerradas y letras (hoy el satín es de ancho fijo sobre el trazado).
 - Kerning en textos; marcar cortes de hilo (hoy solo saltos).

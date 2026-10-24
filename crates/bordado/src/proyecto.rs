@@ -17,6 +17,8 @@ pub const FORMATO_ANTIGUO: &str = "bordado";
 pub const EXTENSION: &str = "edenbord";
 /// Versión del formato que escribe esta librería.
 pub const VERSION: u32 = 1;
+/// `formato` del texto que se copia al portapapeles (ver [`copiar_objetos`]).
+pub const FORMATO_PORTAPAPELES: &str = "edenbord-objetos";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Proyecto {
@@ -44,6 +46,9 @@ pub struct Fondo {
     pub opacidad: f32,
     #[serde(default = "si")]
     pub visible: bool,
+    /// Bloqueada: los clics la atraviesan y no se puede mover ni escalar con el ratón.
+    #[serde(default, skip_serializing_if = "no")]
+    pub bloqueado: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +64,10 @@ pub struct Objeto {
 
 fn si() -> bool {
     true
+}
+
+fn no(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +264,28 @@ impl Objeto {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+struct Portapapeles {
+    formato: String,
+    objetos: Vec<Objeto>,
+}
+
+/// Objetos como texto JSON para el portapapeles del sistema (así se pueden pegar en otra
+/// ventana): `{"formato":"edenbord-objetos","objetos":[…]}`.
+pub fn copiar_objetos(objetos: &[Objeto]) -> String {
+    serde_json::to_string(&Portapapeles {
+        formato: FORMATO_PORTAPAPELES.into(),
+        objetos: objetos.to_vec(),
+    })
+    .expect("los objetos siempre se pueden serializar")
+}
+
+/// Lee lo que dejó [`copiar_objetos`]; `None` si el texto es otra cosa.
+pub fn pegar_objetos(texto: &str) -> Option<Vec<Objeto>> {
+    let p: Portapapeles = serde_json::from_str(texto.trim()).ok()?;
+    (p.formato == FORMATO_PORTAPAPELES).then_some(p.objetos)
+}
+
 /// (De)serializa un [`BezPath`] como texto `d` de SVG, con coordenadas redondeadas a µm.
 mod svg_d {
     use std::fmt::Write;
@@ -338,12 +369,39 @@ mod tests {
             ancho: 80.0,
             opacidad: 0.5,
             visible: true,
+            bloqueado: false,
         });
         let text = p.guardar();
+        assert!(
+            !text.contains("bloqueado"),
+            "solo se escribe si está bloqueado"
+        );
         assert!(text.contains("\"d\": \"M0,0 L10.5,0 L10.5,-3.25 Q5,2 0,0 Z\""));
         let back = Proyecto::leer(&text).unwrap();
         assert_eq!(back, p);
         assert_eq!(back.guardar(), text);
+
+        p.fondo.as_mut().unwrap().bloqueado = true;
+        let text = p.guardar();
+        assert!(text.contains("\"bloqueado\": true"));
+        assert_eq!(Proyecto::leer(&text).unwrap(), p);
+    }
+
+    #[test]
+    fn clipboard_roundtrip() {
+        let o = Objeto {
+            nombre: "zona".into(),
+            visible: true,
+            color: 3,
+            forma: Forma::Linea {
+                d: BezPath::from_svg("M0,0 L1.5,2").unwrap(),
+            },
+            puntada: PRESETS[1].1.clone(),
+        };
+        let text = copiar_objetos(std::slice::from_ref(&o));
+        assert_eq!(pegar_objetos(&text), Some(vec![o]));
+        assert_eq!(pegar_objetos("hola"), None);
+        assert_eq!(pegar_objetos(r#"{"formato":"otro","objetos":[]}"#), None);
     }
 
     #[test]

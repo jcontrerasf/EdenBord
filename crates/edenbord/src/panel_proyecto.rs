@@ -82,6 +82,10 @@ impl Editor {
             let doc = self.proyecto.as_mut().unwrap();
             info_section(ui, doc);
             ui.separator();
+            if self.tool == Tool::Nodes {
+                self.nodes_section(ui);
+                ui.separator();
+            }
             self.trace_section(ui);
             ui.separator();
             let doc = self.proyecto.as_mut().unwrap();
@@ -108,6 +112,39 @@ impl Editor {
         });
     }
 
+    /// Ayuda y acciones de la herramienta de nodos.
+    fn nodes_section(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Nodos");
+        let doc = self.proyecto.as_mut().unwrap();
+        let Some(i) = doc.editable() else {
+            ui.small("Elige un contorno o una línea (clic en el lienzo) para editar sus nodos.");
+            return;
+        };
+        ui.small(
+            "Arrastrar: mover nodos o manijas · Shift/Ctrl+clic: agregar · arrastrar en el \
+             vacío: elegir varios · doble clic en el trazo: agregar nodo · Supr: borrar",
+        );
+        let ids = self.nodos_sel.clone();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!ids.is_empty(), egui::Button::new("Esquina ↔ curva"))
+                .clicked()
+            {
+                doc.edit_nodes(i, |subs| {
+                    crate::nodos::alternar_curva(subs, &ids);
+                    true
+                });
+            }
+            if ui
+                .add_enabled(!ids.is_empty(), egui::Button::new("🗑 Borrar nodos"))
+                .clicked()
+            {
+                doc.edit_nodes(i, |subs| crate::nodos::borrar(subs, &ids));
+                self.nodos_sel.clear();
+            }
+        });
+    }
+
     /// Sección "Calcar": imagen de fondo y herramienta pluma.
     fn trace_section(&mut self, ui: &mut egui::Ui) {
         ui.strong("Calcar");
@@ -116,8 +153,8 @@ impl Editor {
         } else {
             ui.small(
                 "Clic: vértice en esquina · arrastrar: vértice con curva · clic en el primero: \
-                 cerrar zona · Enter: terminar línea · Retroceso: borrar vértice · Esc: cancelar \
-                 · rueda o botón central: mover la vista",
+                 cerrar zona · Enter: terminar línea · Retroceso o Ctrl+Z: borrar vértice · Esc: \
+                 cancelar · botón central o Espacio + arrastrar: mover la vista",
             );
             ui.horizontal(|ui| {
                 if ui
@@ -169,6 +206,8 @@ impl Editor {
             let mut f = fondo.clone();
             ui.horizontal(|ui| {
                 ui.checkbox(&mut f.visible, "Ver");
+                ui.checkbox(&mut f.bloqueado, "🔒 Bloquear")
+                    .on_hover_text("Bloqueada, los clics la atraviesan y no se mueve con el ratón");
                 ui.add(egui::Slider::new(&mut f.opacidad, 0.05..=1.0).text("opacidad"));
             });
             ui.horizontal(|ui| {
@@ -225,6 +264,7 @@ impl Editor {
                 ancho,
                 opacidad: 0.6,
                 visible: true,
+                bloqueado: false,
             });
         });
         self.fit_pending = true;
@@ -503,7 +543,11 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             doc.seleccion.fill(false);
         }
     });
-    ui.small("Clic aquí o en el lienzo: seleccionar · Ctrl+clic: agregar · Supr: borrar");
+    ui.small(
+        "Clic aquí o en el lienzo: seleccionar · Ctrl/Shift+clic: agregar · arrastrar en el \
+         vacío: elegir con un rectángulo · Ctrl+C/X/V: copiar, cortar, pegar (Ctrl+Shift+V: en \
+         el mismo lugar) · Ctrl+D: duplicar · Ctrl+A: todo · Supr: borrar",
+    );
     if doc.proyecto.objetos.is_empty() {
         ui.label("Sin objetos: importa un SVG o agrega un texto.");
     }
@@ -648,6 +692,7 @@ fn properties_section(
     let i = sel[0];
     let mut obj = doc.proyecto.objetos[i].clone();
     let mut font = None;
+    let mut to_path = false;
     ui.horizontal(|ui| {
         ui.label("Nombre");
         ui.text_edit_singleline(&mut obj.nombre);
@@ -685,12 +730,26 @@ fn properties_section(
                 font = Some(None);
             }
         });
+        if ui
+            .add_enabled(
+                !doc.lineas[i].is_empty(),
+                egui::Button::new("Convertir en trazado"),
+            )
+            .on_hover_text("Pasa a ser un contorno: se pueden editar sus nodos, ya no el texto")
+            .clicked()
+        {
+            to_path = true;
+        }
         if *alto < 6.0 {
             ui.colored_label(WARNING, "⚠ Texto chico: el relleno puede perder detalle");
         }
     }
     if obj != doc.proyecto.objetos[i] {
         doc.edit_grouped(format!("props {i}"), |p| p.objetos[i] = obj);
+    }
+    // El botón solo está activo si el texto ya se pudo trazar: convertir no falla.
+    if to_path {
+        let _ = doc.text_to_path(i);
     }
     font
 }

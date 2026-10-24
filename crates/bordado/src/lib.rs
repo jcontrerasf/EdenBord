@@ -10,11 +10,13 @@ pub mod puntadas;
 pub mod svg;
 pub mod texto;
 
+use std::ops::Range;
+
 use kurbo::{Affine, BezPath, Point};
 
 pub use proyecto::{
-    EXTENSION, FORMATO, FORMATO_ANTIGUO, Fondo, Forma, Objeto, PRESETS, Proyecto, ProyectoError,
-    Puntada, VERSION,
+    EXTENSION, FORMATO, FORMATO_ANTIGUO, FORMATO_PORTAPAPELES, Fondo, Forma, Objeto, PRESETS,
+    Proyecto, ProyectoError, Puntada, VERSION, copiar_objetos, pegar_objetos,
 };
 
 use geom::{Polilinea, polilineas};
@@ -105,6 +107,9 @@ pub struct Generado {
     pub jef: Jef,
     /// Para cada bloque de color del JEF, el índice del primer objeto que lo forma.
     pub objeto_de_bloque: Vec<usize>,
+    /// Para cada objeto (en orden), las entradas de `jef.stitches` que generó, incluido el
+    /// salto o cambio de color con que empieza. Vacío si no se borda.
+    pub rangos: Vec<Range<usize>>,
     pub avisos: Vec<String>,
 }
 
@@ -115,10 +120,13 @@ impl Proyecto {
         let mut stitches: Vec<Stitch> = Vec::new();
         let mut colors = Vec::new();
         let mut objeto_de_bloque = Vec::new();
+        let mut rangos = Vec::with_capacity(self.objetos.len());
         let mut avisos = Vec::new();
         let mut aguja = Point::ZERO;
         let mut pos = (0, 0);
         for (i, obj) in self.objetos.iter().enumerate() {
+            let inicio = stitches.len();
+            rangos.push(inicio..inicio);
             if !obj.visible {
                 continue;
             }
@@ -156,6 +164,7 @@ impl Proyecto {
                 pos = *t.last().unwrap();
             }
             aguja = Point::new(f64::from(pos.0) / 10.0, f64::from(pos.1) / 10.0);
+            rangos[i] = inicio..stitches.len();
         }
         if colors.is_empty() {
             colors.push(self.objetos.first().map_or(1, |o| o.color));
@@ -163,6 +172,7 @@ impl Proyecto {
         Generado {
             jef: Jef::new(Hoop::from_code(self.bastidor), colors, stitches),
             objeto_de_bloque,
+            rangos,
             avisos,
         }
     }
@@ -206,6 +216,8 @@ mod tests {
         assert!(g.avisos.is_empty());
         assert_eq!(g.jef.colors, vec![10, 1]);
         assert_eq!(g.objeto_de_bloque, vec![0, 2]);
+        assert_eq!(g.rangos.len(), p.objetos.len());
+        assert_eq!(g.rangos.last().unwrap().end, g.jef.stitches.len());
         assert_eq!(g.jef.count(StitchKind::ColorChange), 1);
         assert!(g.jef.count(StitchKind::Normal) > 1000);
 

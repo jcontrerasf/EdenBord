@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use bordado::geom::{Polilinea, polilineas};
 use bordado::{Forma, Generado, Objeto, Proyecto};
 use jef::Bounds;
-use kurbo::{Affine, Point, Rect, Vec2};
+use kurbo::{Affine, Point, Rect};
+
+use crate::nodos;
 
 /// Cuántas versiones anteriores se guardan para deshacer.
 const HISTORY_LIMIT: usize = 100;
@@ -22,8 +24,9 @@ pub struct ProyectoDoc {
     pub generado: Generado,
     /// Formas de cada objeto como polilíneas (mm), para dibujar y elegir con el clic.
     pub lineas: Vec<Vec<Polilinea>>,
-    undo: Vec<Proyecto>,
-    redo: Vec<Proyecto>,
+    /// Versiones anteriores y siguientes, cada una con su selección.
+    undo: Vec<(Proyecto, Vec<bool>)>,
+    redo: Vec<(Proyecto, Vec<bool>)>,
     /// Clave de la última edición agrupada (ver [`ProyectoDoc::edit_grouped`]).
     last_key: Option<String>,
 }
@@ -56,7 +59,8 @@ impl ProyectoDoc {
 
     /// Guarda la versión actual en el historial antes de una edición.
     pub fn checkpoint(&mut self) {
-        self.undo.push(self.proyecto.clone());
+        self.undo
+            .push((self.proyecto.clone(), self.seleccion.clone()));
         if self.undo.len() > HISTORY_LIMIT {
             self.undo.remove(0);
         }
@@ -91,22 +95,36 @@ impl ProyectoDoc {
         !self.redo.is_empty()
     }
 
+    /// Cierra el grupo de [`edit_grouped`](Self::edit_grouped) en curso: la próxima edición
+    /// agrupada tendrá su propio punto de deshacer aunque use la misma clave.
+    pub fn end_group(&mut self) {
+        self.last_key = None;
+    }
+
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.proyecto, prev));
-            self.dirty = true;
-            self.last_key = None;
-            self.sync();
+            let current = self.restore(prev);
+            self.redo.push(current);
         }
     }
 
     pub fn redo(&mut self) {
         if let Some(next) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.proyecto, next));
-            self.dirty = true;
-            self.last_key = None;
-            self.sync();
+            let current = self.restore(next);
+            self.undo.push(current);
         }
+    }
+
+    /// Pone una versión del historial y devuelve la actual.
+    fn restore(&mut self, (proyecto, seleccion): (Proyecto, Vec<bool>)) -> (Proyecto, Vec<bool>) {
+        let current = (
+            std::mem::replace(&mut self.proyecto, proyecto),
+            std::mem::replace(&mut self.seleccion, seleccion),
+        );
+        self.dirty = true;
+        self.last_key = None;
+        self.sync();
+        current
     }
 
     /// Recalcula puntadas y formas, y ajusta la selección al número de objetos.
@@ -136,16 +154,34 @@ impl ProyectoDoc {
         });
     }
 
-    /// Mueve la selección en mm sin punto de deshacer (el arrastre lo guarda al empezar).
-    pub fn translate(&mut self, sel: &[usize], dx: f64, dy: f64) {
-        let t = Affine::translate(Vec2::new(dx, dy));
-        for (i, o) in self.proyecto.objetos.iter_mut().enumerate() {
-            if sel.is_empty() || sel.contains(&i) {
-                o.transformar(t);
+    /// Aplica una transformación ya calculada (la de un gesto) a la selección.
+    pub fn transform_affine(&mut self, sel: &[usize], t: Affine) {
+        if t == Affine::IDENTITY {
+            return;
+        }
+        self.transform(sel, |_| t);
+    }
+
+    /// Cambia la imagen de fondo con su punto de deshacer, sin regenerar puntadas (el fondo no
+    /// se borda).
+    pub fn edit_fondo(&mut self, f: impl FnOnce(&mut bordado::Fondo)) {
+        if self.proyecto.fondo.is_some() {
+            self.checkpoint();
+            if let Some(fondo) = &mut self.proyecto.fondo {
+                f(fondo);
             }
         }
-        self.dirty = true;
-        self.sync();
+    }
+
+    /// Objetos visibles cuyas formas caben enteras en `r` (mm).
+    pub fn objects_in(&self, r: Rect) -> Vec<usize> {
+        (0..self.proyecto.objetos.len())
+            .filter(|&i| self.proyecto.objetos[i].visible || self.seleccion[i])
+            .filter(|&i| {
+                self.rect_of(&[i])
+                    .is_some_and(|o| crate::gestos::contiene(r, o))
+            })
+            .collect()
     }
 
     /// Rectángulo (mm) de las formas de `sel` (vacío = todas).
@@ -310,6 +346,120 @@ impl ProyectoDoc {
         self.seleccion.fill(false);
         self.seleccion[index + 1] = true;
     }
+
+    /// Copias de los objetos seleccionados, en orden de bordado.
+    pub fn selected_objects(&self) -> Vec<Objeto> {
+        self.selection()
+            .into_iter()
+            .map(|i| self.proyecto.objetos[i].clone())
+            .collect()
+    }
+
+    /// Agrega objetos pegados al final, seleccionados. Con `centro`, los mueve para que su
+    /// rectángulo quede centrado ahí (mm); si no, quedan donde estaban.
+    pub fn paste(&mut self, mut objetos: Vec<Objeto>, centro: Option<Point>) {
+        if objetos.is_empty() {
+            return;
+        }
+        if let (Some(c), Some(r)) = (centro, rect_objetos(&objetos)) {
+            let t = Affine::translate(c - r.center());
+            for o in &mut objetos {
+                o.transformar(t);
+            }
+        }
+        self.add(objetos);
+    }
+
+    /// Copia cada objeto seleccionado justo después del original, en el mismo lugar, y deja
+    /// seleccionadas las copias.
+    pub fn duplicate_selected(&mut self) {
+        let sel = self.selection();
+        if sel.is_empty() {
+            return;
+        }
+        self.edit(|p| {
+            for &i in sel.iter().rev() {
+                let mut o = p.objetos[i].clone();
+                o.nombre.push_str(" (copia)");
+                p.objetos.insert(i + 1, o);
+            }
+        });
+        // Original i queda en i + (copias antes de él); su copia, justo después.
+        self.seleccion = vec![false; self.proyecto.objetos.len()];
+        for (k, &i) in sel.iter().enumerate() {
+            self.seleccion[i + k + 1] = true;
+        }
+    }
+
+    /// El objeto cuyos nodos se pueden editar: el único seleccionado, si es contorno o línea.
+    pub fn editable(&self) -> Option<usize> {
+        match self.selection()[..] {
+            [i] if matches!(
+                self.proyecto.objetos[i].forma,
+                Forma::Contorno { .. } | Forma::Linea { .. }
+            ) =>
+            {
+                Some(i)
+            }
+            _ => None,
+        }
+    }
+
+    /// Nodos del trazado del objeto `i` (si es contorno o línea).
+    pub fn nodes(&self, i: usize) -> Option<Vec<nodos::Sub>> {
+        match &self.proyecto.objetos.get(i)?.forma {
+            Forma::Contorno { d } | Forma::Linea { d } => Some(nodos::desde_trazado(d)),
+            Forma::Texto { .. } => None,
+        }
+    }
+
+    /// Reemplaza el trazado del objeto `i` sin punto de deshacer ni regenerar puntadas (para
+    /// arrastrar nodos: el arrastre guarda el punto al empezar y llama a `sync` al soltar).
+    pub fn set_nodes_live(&mut self, i: usize, subs: &[nodos::Sub]) {
+        let Some(o) = self.proyecto.objetos.get_mut(i) else {
+            return;
+        };
+        if let Forma::Contorno { d } | Forma::Linea { d } = &mut o.forma {
+            *d = nodos::a_trazado(subs);
+            self.lineas[i] = polilineas(d);
+            self.dirty = true;
+        }
+    }
+
+    /// Edita los nodos del objeto `i` con un punto de deshacer; `f` devuelve si cambió algo.
+    pub fn edit_nodes(&mut self, i: usize, f: impl FnOnce(&mut Vec<nodos::Sub>) -> bool) {
+        let Some(mut subs) = self.nodes(i) else {
+            return;
+        };
+        if f(&mut subs) {
+            self.checkpoint();
+            self.set_nodes_live(i, &subs);
+            self.sync();
+        }
+    }
+
+    /// Convierte un texto en contorno (deja de depender de la fuente; se pueden editar nodos).
+    pub fn text_to_path(&mut self, i: usize) -> Result<(), String> {
+        let d = self.proyecto.objetos[i].trazado()?;
+        self.edit(|p| p.objetos[i].forma = Forma::Contorno { d });
+        Ok(())
+    }
+
+    pub fn select_all(&mut self) {
+        self.seleccion.fill(true);
+    }
+}
+
+/// Rectángulo (mm) de las formas de unos objetos sueltos.
+fn rect_objetos(objetos: &[Objeto]) -> Option<Rect> {
+    objetos
+        .iter()
+        .filter_map(|o| o.trazado().ok())
+        .flat_map(|d| polilineas(&d))
+        .flat_map(|pl| pl.puntos)
+        .fold(None, |r: Option<Rect>, p| {
+            Some(r.map_or(Rect::from_points(p, p), |r| r.union_pt(p)))
+        })
 }
 
 /// Regla par-impar sobre todas las polilíneas (abiertas se consideran cerradas).
@@ -391,6 +541,54 @@ mod tests {
         d.remove(0);
         assert_eq!(d.proyecto.objetos.len(), 2);
         assert!(d.selection().is_empty());
+    }
+
+    #[test]
+    fn undo_restores_selection_and_groups_end() {
+        let mut d = doc();
+        d.seleccion[1] = true;
+        d.remove_selected();
+        assert_eq!(d.proyecto.objetos.len(), 1);
+        d.undo();
+        assert_eq!(d.selection(), vec![1], "lo borrado vuelve seleccionado");
+        d.redo();
+        assert!(d.selection().is_empty());
+
+        d.edit_grouped("a".into(), |p| p.objetos[0].color = 2);
+        d.end_group();
+        d.edit_grouped("a".into(), |p| p.objetos[0].color = 3);
+        d.undo();
+        assert_eq!(d.proyecto.objetos[0].color, 2, "grupos separados");
+    }
+
+    #[test]
+    fn box_selection_needs_whole_shape() {
+        let d = doc();
+        assert_eq!(d.objects_in(Rect::new(11.0, 11.0, 15.0, 15.0)), vec![1]);
+        assert_eq!(d.objects_in(Rect::new(-1.0, -1.0, 31.0, 31.0)), vec![0, 1]);
+        assert!(d.objects_in(Rect::new(-1.0, -1.0, 29.0, 31.0)).len() == 1);
+    }
+
+    #[test]
+    fn duplicate_and_paste_select_the_new_objects() {
+        let mut d = doc();
+        d.select_all();
+        d.duplicate_selected();
+        assert_eq!(d.proyecto.objetos.len(), 4);
+        assert_eq!(d.selection(), vec![1, 3]);
+        assert_eq!(d.proyecto.objetos[1], {
+            let mut o = d.proyecto.objetos[0].clone();
+            o.nombre.push_str(" (copia)");
+            o
+        });
+
+        let copia = d.selected_objects();
+        d.paste(copia, Some(Point::new(100.0, 0.0)));
+        assert_eq!(d.selection(), vec![4, 5]);
+        let r = d.rect_of(&[4, 5]).unwrap();
+        assert!(r.center().distance(Point::new(100.0, 0.0)) < 1e-9);
+        d.undo();
+        assert_eq!(d.proyecto.objetos.len(), 4);
     }
 
     #[test]

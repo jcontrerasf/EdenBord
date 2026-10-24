@@ -2,14 +2,13 @@
 
 use std::path::PathBuf;
 
-use bordado::booleanas::Booleana;
 use bordado::{Fondo, Forma, Objeto, PRESETS, Proyecto, Puntada};
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
 use kurbo::{Affine, Point, Shape};
 
 use crate::tema::AVISO as WARNING;
-use crate::{Editor, Tool, file_name, iconos, lista, tema, write_verified};
+use crate::{Editor, file_name, iconos, lista, tema, write_verified};
 
 impl Editor {
     /// Panel derecho de un proyecto: objetos arriba, propiedades abajo.
@@ -53,24 +52,9 @@ impl Editor {
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(6.0);
-                if self.tool == Tool::Nodes {
-                    self.nodes_section(ui);
-                    ui.separator();
-                }
-                self.trace_section(ui);
                 let doc = self.proyecto.as_mut().unwrap();
                 if let Some(path) = properties_section(ui, doc, &mut self.picking_color) {
                     self.change_font(path);
-                }
-                ui.separator();
-                let doc = self.proyecto.as_ref().unwrap();
-                let label = if doc.selection().is_empty() {
-                    "Transformar todo"
-                } else {
-                    "Transformar selección"
-                };
-                if let Some(op) = self.transform_section(ui, label, false) {
-                    crate::apply_proyecto(self.proyecto.as_mut().unwrap(), op);
                 }
                 ui.separator();
                 tema::titulo(ui, "Diseño");
@@ -80,137 +64,6 @@ impl Editor {
                     self.fondo_section(ui);
                 }
             });
-    }
-
-    /// Ayuda y acciones de la herramienta de nodos.
-    fn nodes_section(&mut self, ui: &mut egui::Ui) {
-        tema::titulo(ui, "Nodos");
-        let doc = self.proyecto.as_mut().unwrap();
-        let Some(i) = doc.editable() else {
-            ui.small("Elige un contorno o una línea (clic en el lienzo) para editar sus nodos.");
-            return;
-        };
-        ui.small(
-            "Arrastrar: mover nodos o manijas · Shift/Ctrl+clic: agregar · arrastrar en el \
-             vacío: elegir varios · doble clic en el trazo: agregar nodo · Supr: borrar",
-        );
-        let ids = self.nodos_sel.clone();
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    !ids.is_empty(),
-                    egui::Button::new(format!("{} Esquina ↔ curva", iconos::ESQUINA_CURVA)),
-                )
-                .clicked()
-            {
-                doc.edit_nodes(i, |subs| {
-                    crate::nodos::alternar_curva(subs, &ids);
-                    true
-                });
-            }
-            if ui
-                .add_enabled(
-                    !ids.is_empty(),
-                    egui::Button::new(format!("{} Borrar nodos", iconos::BORRAR)),
-                )
-                .clicked()
-            {
-                doc.edit_nodes(i, |subs| crate::nodos::borrar(subs, &ids));
-                self.nodos_sel.clear();
-            }
-        });
-    }
-
-    /// Acciones de la pluma y de trazados (combinar, separar, booleanas), si vienen al caso.
-    fn trace_section(&mut self, ui: &mut egui::Ui) {
-        if self.tool == Tool::Pen {
-            tema::titulo(ui, "Pluma");
-            ui.small(
-                "Clic: vértice en esquina · arrastrar: vértice con curva · clic en el primero: \
-                 cerrar zona · Enter: terminar línea · Retroceso o Ctrl+Z: borrar vértice · Esc: \
-                 cancelar · botón central o Espacio + arrastrar: mover la vista",
-            );
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(self.pen.cerrable(), egui::Button::new("Cerrar zona"))
-                    .clicked()
-                {
-                    self.finish_pen(true);
-                }
-                if ui
-                    .add_enabled(
-                        self.pen.nodos.len() >= 2,
-                        egui::Button::new("Terminar línea"),
-                    )
-                    .clicked()
-                {
-                    self.finish_pen(false);
-                }
-                if ui
-                    .add_enabled(!self.pen.nodos.is_empty(), egui::Button::new("Cancelar"))
-                    .clicked()
-                {
-                    self.pen = Default::default();
-                }
-            });
-        }
-        let doc = self.proyecto.as_mut().unwrap();
-        let sel = doc.selection();
-        let mut combine = false;
-        let mut split = false;
-        ui.horizontal(|ui| {
-            if sel.len() > 1 {
-                combine = ui
-                    .button(format!("{} Combinar zonas", iconos::COMBINAR))
-                    .on_hover_text(
-                        "Une los contornos seleccionados; los interiores quedan como agujeros",
-                    )
-                    .clicked();
-            }
-            if sel.iter().any(|&i| doc.subpaths(i) > 1) {
-                split = ui
-                    .button(format!("{} Separar trazados", iconos::SEPARAR))
-                    .on_hover_text(
-                        "Cada parte pasa a ser un objeto; los agujeros quedan como zonas aparte \
-                         (bórralos o vuelve a combinarlos). Los textos: primero «Convertir en \
-                         trazado»",
-                    )
-                    .clicked();
-            }
-        });
-        if split {
-            doc.split();
-        }
-        if combine && !doc.combine() {
-            self.error("Selecciona al menos dos contornos para combinar");
-        }
-
-        let doc = self.proyecto.as_mut().unwrap();
-        if doc.selection().len() > 1 {
-            let mut op = None;
-            ui.horizontal(|ui| {
-                ui.label("Booleanas");
-                for b in Booleana::TODAS {
-                    let hover = match b {
-                        Booleana::Unir => "Une las zonas en una sola",
-                        Booleana::Restar => {
-                            "Recorta la primera (la que se borda antes) con las demás, que se \
-                             conservan: el fondo no se cose bajo las piezas de encima"
-                        }
-                        Booleana::Intersecar => "Deja solo lo que tienen en común",
-                        Booleana::Excluir => "Deja lo que cubre una sola de las zonas",
-                    };
-                    if ui.button(b.nombre()).on_hover_text(hover).clicked() {
-                        op = Some(b);
-                    }
-                }
-            });
-            if let Some(op) = op
-                && let Err(e) = doc.boolean(op)
-            {
-                self.error(e);
-            }
-        }
     }
 
     /// Imagen de fondo para calcar.

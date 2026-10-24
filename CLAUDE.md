@@ -136,6 +136,11 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   redimensionable, propiedades abajo) y barra de estado (simulación, vista, mensaje,
   coordenadas). Sin documento: `welcome`. Las barras reservan primero lo de la derecha
   (`right_to_left`) y recortan lo que no cabe. No hay barra de menús (decisión del usuario).
+- `contexto.rs`: barra contextual bajo la superior, según `Tool`: Seleccionar = X/Y/ancho/alto
+  editables (proyecto: `transform_grouped`, candado proporcional `lock_ratio`; JEF: solo X/Y con
+  `Doc::edit_grouped`, el tamaño se muestra), girar/espejar/escalar %/centrar (`Op`), paso de las
+  flechas, y con varios objetos combinar, separar y booleanas; Nodos, Pluma y Regla muestran sus
+  acciones y la medida. Los paneles ya no tienen "Transformar" ni las secciones de pluma/nodos.
 - `lista.rs`: filas de las listas (colores JEF y objetos): `fila` (clic elige, arrastrar
   reordena con `DragAndDrop`; botones de la derecha con prioridad), `clic`, `hueco`, `soltar`.
 - `doc.rs`: `Doc` = diseño + visibilidad/selección por bloque + historial (100 copias del `Jef`).
@@ -189,6 +194,9 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   objeto elegido es parte de ella.
 - `tool_drags()`: con nodos, pluma o regla el arrastre principal es de la herramienta, no
   mueve vista ni selección. `overlays` (regla y puntero) lo llaman ambos lienzos.
+- Zoom limitado a `MIN_SCALE..=MAX_SCALE` (máx. 60 px/mm): las polilíneas en caché usan
+  `geom::TOLERANCIA` (0,02 mm) y con más zoom las curvas se ven angulosas. La vista previa de la
+  pluma se aproxima según el zoom.
 - Ajuste de la vista: tras ajustar, mientras no se mueva la vista (`fit_size`), si el lienzo
   cambia de tamaño se vuelve a ajustar (la ventana se acomoda después del primer cuadro).
 - Cuadrícula (`draw_grid`): alineada al origen, paso adaptativo 1/5/10/50/100 mm (≥ 8 px),

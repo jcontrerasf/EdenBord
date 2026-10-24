@@ -40,10 +40,6 @@ pub const BASTIDOR: &str = "\u{E626}"; // frame-corners
 pub const CONTORNOS: &str = "\u{E69A}"; // selection
 
 // Transformar.
-pub const IZQUIERDA: &str = "\u{E058}"; // arrow-left
-pub const ARRIBA: &str = "\u{E08E}"; // arrow-up
-pub const ABAJO: &str = "\u{E03E}"; // arrow-down
-pub const DERECHA: &str = "\u{E06C}"; // arrow-right
 pub const GIRAR_IZQ: &str = "\u{E038}"; // arrow-counter-clockwise
 pub const GIRAR_DER: &str = "\u{E036}"; // arrow-clockwise
 pub const ESPEJO_H: &str = "\u{ED6A}"; // flip-horizontal
@@ -52,10 +48,23 @@ pub const CENTRAR: &str = "\u{E1D6}"; // crosshair
 pub const SUBIR: &str = "\u{E13C}"; // caret-up
 pub const BAJAR: &str = "\u{E136}"; // caret-down
 
+pub const PROPORCIONAL: &str = "\u{E2EA}"; // link-simple-horizontal
+pub const LIBRE: &str = "\u{E2EC}"; // link-simple-horizontal-break
+pub const PASO: &str = "\u{E0A4}"; // arrows-out-cardinal
+pub const ESCALAR: &str = "\u{ED6E}"; // resize
+pub const GIRAR: &str = "\u{E7BC}"; // angle
+
 // Trazados.
-pub const COMBINAR: &str = "\u{E87E}"; // unite
+pub const COMBINAR: &str = "\u{E468}"; // stack-simple
 pub const SEPARAR: &str = "\u{EAE0}"; // scissors
 pub const ESQUINA_CURVA: &str = "\u{E39C}"; // path
+pub const UNIR: &str = "\u{E87E}"; // unite
+pub const RESTAR: &str = "\u{EBD6}"; // subtract
+pub const INTERSECAR: &str = "\u{E2D2}"; // intersect
+pub const EXCLUIR: &str = "\u{E882}"; // exclude
+pub const CERRAR: &str = "\u{E6D0}"; // polygon
+pub const LISTO: &str = "\u{E182}"; // check
+pub const CANCELAR: &str = "\u{E4F6}"; // x
 
 // Tipos de puntada.
 pub const GUIA: &str = "\u{E602}"; // circle-dashed

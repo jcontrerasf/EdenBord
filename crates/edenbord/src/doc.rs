@@ -18,6 +18,8 @@ pub struct Doc {
     pub dirty: bool,
     undo: Vec<Jef>,
     redo: Vec<Jef>,
+    /// Clave de la última edición agrupada (ver [`Doc::edit_grouped`]).
+    last_key: Option<&'static str>,
 }
 
 impl Doc {
@@ -31,6 +33,7 @@ impl Doc {
             dirty: false,
             undo: vec![],
             redo: vec![],
+            last_key: None,
         };
         doc.sync();
         doc
@@ -51,6 +54,7 @@ impl Doc {
         }
         self.redo.clear();
         self.dirty = true;
+        self.last_key = None;
     }
 
     /// Aplica una edición con su punto de deshacer.
@@ -58,6 +62,22 @@ impl Doc {
         self.checkpoint();
         f(&mut self.jef);
         self.sync();
+    }
+
+    /// Como [`edit`](Self::edit), pero ediciones seguidas con la misma clave (arrastrar un
+    /// valor) comparten un solo punto de deshacer.
+    pub fn edit_grouped(&mut self, key: &'static str, f: impl FnOnce(&mut Jef)) {
+        if self.last_key != Some(key) {
+            self.checkpoint();
+            self.last_key = Some(key);
+        }
+        f(&mut self.jef);
+        self.sync();
+    }
+
+    /// Termina la edición agrupada en curso.
+    pub fn end_group(&mut self) {
+        self.last_key = None;
     }
 
     pub fn can_undo(&self) -> bool {

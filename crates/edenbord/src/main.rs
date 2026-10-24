@@ -7,6 +7,7 @@
 
 mod barras;
 mod canvas;
+mod contexto;
 mod doc;
 mod gestos;
 mod iconos;
@@ -149,6 +150,8 @@ struct Editor {
     step_mm: f32,
     angle: f64,
     scale_pct: f64,
+    /// Ancho y alto proporcionales en la barra contextual.
+    lock_ratio: bool,
 
     // Simulación: cuántas entradas de la secuencia se dibujan.
     progress: usize,
@@ -194,6 +197,7 @@ impl Default for Editor {
             step_mm: 1.0,
             angle: 15.0,
             scale_pct: 100.0,
+            lock_ratio: true,
             progress: usize::MAX,
             playing: false,
             speed: 1.0,
@@ -637,16 +641,6 @@ impl Editor {
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(6.0);
-                let doc = self.doc.as_ref().unwrap();
-                let label = if doc.selection().is_empty() {
-                    "Transformar todo"
-                } else {
-                    "Transformar selección"
-                };
-                if let Some(op) = self.transform_section(ui, label, true) {
-                    apply_jef(self.doc.as_mut().unwrap(), op);
-                }
-                ui.separator();
                 tema::titulo(ui, "Diseño");
                 let doc = self.doc.as_mut().unwrap();
                 Self::info_section(ui, doc);
@@ -804,95 +798,6 @@ impl Editor {
             None => {}
         }
         pick
-    }
-
-    /// Controles de mover, girar, espejar, escalar y centrar. `warn_scale`: avisar fuera de
-    /// [`jef::SAFE_SCALE`] (en los proyectos no hace falta: se regenera la densidad).
-    fn transform_section(
-        &mut self,
-        ui: &mut egui::Ui,
-        label: &str,
-        warn_scale: bool,
-    ) -> Option<Op> {
-        let mut op = None;
-        ui.strong(label);
-        let step = (self.step_mm * 10.0).round() as i32;
-        ui.horizontal(|ui| {
-            ui.label("Mover");
-            for (label, dx, dy) in [
-                (iconos::IZQUIERDA, -1, 0),
-                (iconos::ARRIBA, 0, -1),
-                (iconos::ABAJO, 0, 1),
-                (iconos::DERECHA, 1, 0),
-            ] {
-                if ui.button(label).clicked() {
-                    op = Some(Op::Move(dx * step, dy * step));
-                }
-            }
-            ui.add(
-                egui::DragValue::new(&mut self.step_mm)
-                    .range(0.1..=50.0)
-                    .speed(0.1)
-                    .suffix(" mm"),
-            );
-        });
-        ui.small(if self.proyecto.is_some() {
-            "También: flechas del teclado, o arrastrar en el lienzo (manijas: escalar y girar)"
-        } else {
-            "También: flechas del teclado, o Shift + arrastrar en el lienzo"
-        });
-        ui.horizontal(|ui| {
-            if ui.button(format!("{} 90°", iconos::GIRAR_IZQ)).clicked() {
-                op = Some(Op::Rotate(-90.0));
-            }
-            if ui.button(format!("{} 90°", iconos::GIRAR_DER)).clicked() {
-                op = Some(Op::Rotate(90.0));
-            }
-            if ui.button(format!("{} Espejo", iconos::ESPEJO_H)).clicked() {
-                op = Some(Op::MirrorX);
-            }
-            if ui.button(format!("{} Espejo", iconos::ESPEJO_V)).clicked() {
-                op = Some(Op::MirrorY);
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut self.angle)
-                    .range(-180.0..=180.0)
-                    .speed(1.0)
-                    .suffix("°"),
-            );
-            if ui.button("Rotar").clicked() {
-                op = Some(Op::Rotate(self.angle));
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut self.scale_pct)
-                    .range(10.0..=500.0)
-                    .speed(1.0)
-                    .suffix(" %"),
-            );
-            if ui.button("Escalar").clicked() {
-                op = Some(Op::Scale(self.scale_pct / 100.0));
-            }
-        });
-        if warn_scale && !jef::SAFE_SCALE.contains(&(self.scale_pct / 100.0)) {
-            ui.colored_label(
-                tema::AVISO,
-                format!(
-                    "{} Fuera de 80–120 % la densidad del relleno cambia mucho",
-                    iconos::AVISO
-                ),
-            );
-        }
-        if ui
-            .button(format!("{} Centrar en el bastidor", iconos::CENTRAR))
-            .clicked()
-        {
-            op = Some(Op::Center);
-        }
-        op
     }
 
     /// Ventana para elegir un hilo de la paleta Janome.
@@ -1117,6 +1022,9 @@ impl eframe::App for Editor {
         if idle && let Some(doc) = &mut self.proyecto {
             doc.end_group();
         }
+        if idle && let Some(doc) = &mut self.doc {
+            doc.end_group();
+        }
         self.update_title(ctx);
         self.load_fondo(ctx);
     }
@@ -1130,6 +1038,13 @@ impl eframe::App for Editor {
             .frame(barra)
             .show(ui, |ui| self.top_bar(ui));
         if self.doc.is_some() || self.proyecto.is_some() {
+            egui::Panel::top("contexto")
+                .frame(
+                    egui::Frame::NONE
+                        .fill(tema::LINO_CLARO)
+                        .inner_margin(egui::Margin::symmetric(10, 4)),
+                )
+                .show(ui, |ui| self.context_bar(ui));
             egui::Panel::bottom("estado")
                 .frame(barra)
                 .show(ui, |ui| self.status_bar(ui));

@@ -179,6 +179,21 @@ impl ProyectoDoc {
         self.transform(sel, |_| t);
     }
 
+    /// Como [`transform_affine`](Self::transform_affine), pero las seguidas con la misma clave
+    /// (arrastrar X, Y, ancho o alto) comparten un solo punto de deshacer.
+    pub fn transform_grouped(&mut self, key: &str, sel: &[usize], t: Affine) {
+        if t == Affine::IDENTITY {
+            return;
+        }
+        self.edit_grouped(key.into(), |p| {
+            for (i, o) in p.objetos.iter_mut().enumerate() {
+                if sel.is_empty() || sel.contains(&i) {
+                    o.transformar(t);
+                }
+            }
+        });
+    }
+
     /// Cambia la imagen de fondo con su punto de deshacer, sin regenerar puntadas (el fondo no
     /// se borda).
     pub fn edit_fondo(&mut self, f: impl FnOnce(&mut bordado::Fondo)) {

@@ -22,6 +22,10 @@ const GRID_MIN_PX: f32 = 8.0;
 const PICK_PX: f32 = 6.0;
 /// Margen en píxeles entre la selección y su marco.
 const FRAME_PX: f32 = 4.0;
+/// Zoom mínimo y máximo, en píxeles por 0,1 mm. Más de 60 px/mm no aporta (las puntadas van
+/// en 0,1 mm) y las curvas guardadas (aproximadas a `geom::TOLERANCIA`) se verían angulosas.
+const MIN_SCALE: f32 = 0.01;
+const MAX_SCALE: f32 = 6.0;
 /// Distancia en píxeles para tomar una manija.
 const HANDLE_PX: f32 = 7.0;
 /// Altura en píxeles de la manija de giro sobre el marco.
@@ -132,7 +136,8 @@ impl Editor {
         if self.fit_pending {
             let w = fit.width().max(10) as f32;
             let h = fit.height().max(10) as f32;
-            self.scale = 0.9 * (rect.width() / w).min(rect.height() / h);
+            self.scale =
+                (0.9 * (rect.width() / w).min(rect.height() / h)).clamp(MIN_SCALE, MAX_SCALE);
             let mid = Vec2::new(
                 (fit.min_x + fit.max_x) as f32 / 2.0,
                 (fit.min_y + fit.max_y) as f32 / 2.0,
@@ -157,6 +162,7 @@ impl Editor {
         if response.hovered() {
             let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
             let factor = zoom * (scroll / 400.0).exp();
+            let factor = (self.scale * factor).clamp(MIN_SCALE, MAX_SCALE) / self.scale;
             if factor != 1.0
                 && let Some(pointer) = response.hover_pos()
             {
@@ -291,10 +297,14 @@ impl Editor {
 
     fn draw_pen(&self, painter: &egui::Painter, response: &Response, vista: Vista) {
         let stroke = Stroke::new(2.0, PEN_COLOR);
-        for pl in bordado::geom::polilineas(&self.pen.trazado(false)) {
-            let pts: Vec<Pos2> = pl.puntos.iter().map(|&p| vista.mm(p)).collect();
-            painter.add(Shape::line(pts, stroke));
-        }
+        // Aproximada según el zoom (un cuarto de píxel), no con la tolerancia de las puntadas.
+        let tol = f64::from(0.25 / (10.0 * vista.scale));
+        let mut pts: Vec<Pos2> = vec![];
+        kurbo::flatten(self.pen.trazado(false).iter(), tol, |el| match el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => pts.push(vista.mm(p)),
+            _ => {}
+        });
+        painter.add(Shape::line(pts, stroke));
         if let (Some(last), Some(hover)) = (self.pen.nodos.last(), response.hover_pos())
             && !self.pen.arrastrando
         {

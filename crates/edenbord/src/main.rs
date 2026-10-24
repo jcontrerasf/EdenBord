@@ -952,10 +952,13 @@ impl Editor {
             )
         } else if let Some(doc) = &self.proyecto {
             let obj = doc.proyecto.objetos.get(target);
-            (
-                format!("Color de «{}»", obj.map_or("", |o| o.nombre.as_str())),
-                obj.map(|o| o.color),
-            )
+            let n = doc.selection().len();
+            let title = if n > 1 && doc.seleccion.get(target) == Some(&true) {
+                format!("Color de {n} objetos")
+            } else {
+                format!("Color de «{}»", obj.map_or("", |o| o.nombre.as_str()))
+            };
+            (title, obj.map(|o| o.color))
         } else {
             (String::new(), None)
         };
@@ -992,12 +995,23 @@ impl Editor {
                     });
             });
         if let Some(c) = chosen {
-            if c != current {
-                if let Some(doc) = &mut self.doc {
-                    doc.edit(|j| j.set_color(target, c));
-                }
-                if let Some(doc) = &mut self.proyecto {
-                    doc.edit(|p| p.objetos[target].color = c);
+            if let Some(doc) = &mut self.doc
+                && c != current
+            {
+                doc.edit(|j| j.set_color(target, c));
+            }
+            if let Some(doc) = &mut self.proyecto {
+                // Si el objeto es parte de la selección, el color va a toda la selección.
+                let sel = match doc.selection() {
+                    sel if sel.contains(&target) => sel,
+                    _ => vec![target],
+                };
+                if sel.iter().any(|&i| doc.proyecto.objetos[i].color != c) {
+                    doc.edit(|p| {
+                        for i in sel {
+                            p.objetos[i].color = c;
+                        }
+                    });
                 }
             }
             open = false;

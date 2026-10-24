@@ -4,6 +4,7 @@
 //! [`Proyecto::generar`] calcula las puntadas; el proyecto se puede seguir editando y volver
 //! a generar, cosa que un JEF no permite.
 
+pub mod booleanas;
 pub mod geom;
 mod proyecto;
 pub mod puntadas;
@@ -15,8 +16,8 @@ use std::ops::Range;
 use kurbo::{Affine, BezPath, Point};
 
 pub use proyecto::{
-    EXTENSION, FORMATO, FORMATO_ANTIGUO, FORMATO_PORTAPAPELES, Fondo, Forma, Objeto, PRESETS,
-    Proyecto, ProyectoError, Puntada, VERSION, copiar_objetos, pegar_objetos,
+    EXTENSION, FORMATO, FORMATO_ANTIGUO, FORMATO_PORTAPAPELES, Fondo, Forma, OPACIDAD_GUIA, Objeto,
+    PRESETS, Proyecto, ProyectoError, Puntada, VERSION, copiar_objetos, pegar_objetos,
 };
 
 use geom::{Polilinea, polilineas};
@@ -200,6 +201,7 @@ mod tests {
                 d: BezPath::from_svg(d).unwrap(),
             },
             puntada,
+            opacidad: OPACIDAD_GUIA,
         }
     }
 
@@ -248,6 +250,7 @@ mod tests {
                 afin: Affine::IDENTITY.as_coeffs(),
             },
             puntada: PRESETS[5].1.clone(),
+            opacidad: OPACIDAD_GUIA,
         });
         let g = p.generar();
         assert_eq!(g.avisos.len(), 1);

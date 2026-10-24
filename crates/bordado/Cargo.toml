@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+i_overlay = "9.0.0"
 jef = { version = "0.1.0", path = "../jef" }
 kurbo = "0.13"
 serde = { version = "1.0.229", features = ["derive"] }

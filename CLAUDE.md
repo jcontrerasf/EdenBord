@@ -93,7 +93,8 @@ bastidor. El orden de `objetos` es el orden de bordado. Los proyectos antiguos (
 `.bordado`, `"formato":"bordado"` = `FORMATO_ANTIGUO`) se siguen leyendo; Ctrl+S sobre uno de
 ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto literal.
 
-- `Objeto { nombre, visible, color (paleta Janome), forma, puntada }`.
+- `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad }`. `opacidad` solo
+  sirve para ver las guías en el editor (se omite en el JSON si es `OPACIDAD_GUIA` = 0,15).
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
   `texto {texto, fuente (ruta), alto (mayúsculas, mm), espaciado, afin [6]}`. `d` es el `d` de
   SVG (kurbo `BezPath`), guardado con 3 decimales. Transformar un texto compone su `afin`.
@@ -116,6 +117,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - `Generado.rangos[i]` = entradas de `jef.stitches` del objeto `i` (vista previa al arrastrar).
 - Portapapeles: `copiar_objetos`/`pegar_objetos` = JSON `{"formato":"edenbord-objetos",
   "objetos":[…]}` en el portapapeles del sistema (sirve entre ventanas).
+- `geom::subtrazados` corta un trazado en cada `M` (para "Separar trazados").
+- `booleanas.rs` (crate `i_overlay`): `operar(Booleana::{Unir,Restar,Intersecar,Excluir}, a, b)`
+  con regla par-impar; aplana las curvas (`geom::TOLERANCIA`), el resultado es solo rectas.
+  Varias zonas = `operar_varias` (de a pares, en orden).
+- `Puntada::copiar_cambios(antes, despues)`: copia solo los parámetros que cambiaron (edición
+  de varios objetos sin pisar lo distinto de cada uno).
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
 ## App (`crates/edenbord/src`)
@@ -127,7 +134,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - `canvas.rs`: dibujo (común: `draw_stitches`, `Vista`), zoom/desplazamiento. Vista: botón
   central/derecho o Espacio + arrastrar (en JEF también el arrastre principal; ahí la selección
   se mueve con Shift + arrastrar). En proyectos (`select_input`, prioridad en `pick`): manijas →
-  objeto (clic elige, arrastrar mueve; Ctrl/Shift agrega) → interior del marco → fondo libre →
+  objeto (clic elige, arrastrar mueve; Ctrl/Shift agrega; `object_at`: primero bordes, si no la zona
+  más chica que contiene el punto; los ocultos no se eligen) → interior del marco → fondo libre →
   vacío = rectángulo de selección (`objects_in`, formas enteras dentro).
 - `gestos.rs`: `Editor.gesto` (`Transformar {blanco: Objetos|Fondo, tipo: Mover|Escalar(sx,sy)|
   Girar, r0, desde, af}` o `Caja`). Durante el gesto solo se acumula `af` y se dibuja la vista
@@ -156,7 +164,18 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   manija (simétrica, control = punto + manija), clic en el primero = zona, Enter = línea,
   Retroceso o Ctrl+Z/Esc. Con la pluma el arrastre principal no mueve la vista.
   Los trazos nuevos entran como guías. "Combinar zonas" (`ProyectoDoc::combine`) une contornos
-  en uno: los de adentro quedan como agujeros.
+  en uno: los de adentro quedan como agujeros. "Separar trazados" (`split`) es lo inverso: un
+  objeto por subtrazado, en el mismo lugar del orden. Booleanas (`boolean`): Restar recorta el
+  primero seleccionado (el que se borda antes, el fondo) con los demás, **que se conservan**;
+  Unir/Intersecar/Excluir dejan el resultado en el primero y borran los demás.
+- Guías que son zonas: se ven rellenas (color de hilo × `opacidad`, par-impar) con una malla de
+  trapecios (`proyecto::trapecios`, en caché en `ProyectoDoc.relleno_guias`, recalculada en
+  `sync()`).
+- Lista de objetos: arrastrar el nombre cambia el orden de bordado (`DragAndDrop` de egui con
+  el índice; `drop_target` corrige el hueco tras sacar el objeto).
+- Con varios objetos seleccionados, el panel edita los parámetros del primero y los aplica con
+  `copiar_cambios` a los del mismo tipo; el selector de color pinta toda la selección si el
+  objeto elegido es parte de ella.
 - Barra sobre el lienzo (`canvas.rs::toolbar`): herramienta (`Tool::Select/Nodes/Pen/Ruler`),
   cuadrícula y posición del puntero en mm. `tool_drags()`: con nodos, pluma o regla el arrastre
   principal es de la herramienta, no mueve vista ni selección.
@@ -209,4 +228,4 @@ Ideas pendientes:
 - Exportar a DST/EXP (simples) y PES (complejo).
 - Soporte `.JBF`.
 - Re-densificar al escalar (requiere reconocer rellenos/satines; difícil).
-- Mover un bloque a mano sigue sin poder separarse de su orden de bordado (solo ⏶/⏷).
+- Mover un bloque a mano sigue sin poder separarse de su orden de bordado (solo ⏶/⏷ en JEF).

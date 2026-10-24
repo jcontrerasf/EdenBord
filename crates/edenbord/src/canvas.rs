@@ -401,6 +401,31 @@ impl Editor {
             }
             (m, af)
         });
+        // Relleno traslúcido de las guías (color de hilo), para ver agujeros y partes.
+        let mut mesh = egui::Mesh::default();
+        for (i, obj) in doc.proyecto.objetos.iter().enumerate() {
+            if !obj.visible || doc.relleno_guias[i].is_empty() {
+                continue;
+            }
+            let [r, g, b] = jef::palette::thread(obj.color).map_or([128; 3], |t| t.rgb);
+            let alpha = (obj.opacidad.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+            let af = if doc.seleccion[i] {
+                preview.unwrap_or(kurbo::Affine::IDENTITY)
+            } else {
+                kurbo::Affine::IDENTITY
+            };
+            for t in &doc.relleno_guias[i] {
+                let k = mesh.vertices.len() as u32;
+                for &p in t {
+                    mesh.colored_vertex(vista.mm(af * p), color);
+                }
+                mesh.add_triangle(k, k + 1, k + 2);
+                mesh.add_triangle(k, k + 2, k + 3);
+            }
+        }
+        painter.add(Shape::mesh(mesh));
+
         draw_stitches(
             painter,
             vista,

@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use bordado::booleanas::Booleana;
 use bordado::{Fondo, Forma, Objeto, PRESETS, Proyecto, Puntada};
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
@@ -94,7 +95,7 @@ impl Editor {
             }
             ui.separator();
             let doc = self.proyecto.as_mut().unwrap();
-            if let Some(path) = properties_section(ui, doc) {
+            if let Some(path) = properties_section(ui, doc, &mut self.picking_color) {
                 self.change_font(path);
             }
             ui.separator();
@@ -181,16 +182,61 @@ impl Editor {
             });
         }
         let doc = self.proyecto.as_mut().unwrap();
-        if doc.selection().len() > 1
-            && ui
-                .button("⧉ Combinar zonas")
-                .on_hover_text(
-                    "Une los contornos seleccionados; los interiores quedan como agujeros",
-                )
-                .clicked()
-            && !doc.combine()
-        {
+        let sel = doc.selection();
+        let mut combine = false;
+        let mut split = false;
+        ui.horizontal(|ui| {
+            if sel.len() > 1 {
+                combine = ui
+                    .button("⧉ Combinar zonas")
+                    .on_hover_text(
+                        "Une los contornos seleccionados; los interiores quedan como agujeros",
+                    )
+                    .clicked();
+            }
+            if sel.iter().any(|&i| doc.subpaths(i) > 1) {
+                split = ui
+                    .button("✂ Separar trazados")
+                    .on_hover_text(
+                        "Cada parte pasa a ser un objeto; los agujeros quedan como zonas aparte \
+                         (bórralos o vuelve a combinarlos). Los textos: primero «Convertir en \
+                         trazado»",
+                    )
+                    .clicked();
+            }
+        });
+        if split {
+            doc.split();
+        }
+        if combine && !doc.combine() {
             self.error("Selecciona al menos dos contornos para combinar");
+        }
+
+        let doc = self.proyecto.as_mut().unwrap();
+        if doc.selection().len() > 1 {
+            let mut op = None;
+            ui.horizontal(|ui| {
+                ui.label("Booleanas");
+                for b in Booleana::TODAS {
+                    let hover = match b {
+                        Booleana::Unir => "Une las zonas en una sola",
+                        Booleana::Restar => {
+                            "Recorta la primera (la que se borda antes) con las demás, que se \
+                             conservan: el fondo no se cose bajo las piezas de encima"
+                        }
+                        Booleana::Intersecar => "Deja solo lo que tienen en común",
+                        Booleana::Excluir => "Deja lo que cubre una sola de las zonas",
+                    };
+                    if ui.button(b.nombre()).on_hover_text(hover).clicked() {
+                        op = Some(b);
+                    }
+                }
+            });
+            if let Some(op) = op
+                && let Err(e) = doc.boolean(op)
+            {
+                self.error(e);
+            }
         }
 
         let doc = self.proyecto.as_mut().unwrap();
@@ -317,6 +363,7 @@ impl Editor {
             color: 1,
             forma,
             puntada: Puntada::Ninguna,
+            opacidad: bordado::OPACIDAD_GUIA,
         }]);
         self.pen = Default::default();
     }
@@ -443,6 +490,7 @@ impl Editor {
                 afin: Affine::IDENTITY.as_coeffs(),
             },
             puntada: preset("Relleno horizontal"),
+            opacidad: bordado::OPACIDAD_GUIA,
         };
         match obj.trazado() {
             Ok(d) => {
@@ -555,6 +603,9 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
     let mut pick = None;
     let mut action: Option<(usize, i8)> = None;
     let mut toggle_visible = None;
+    // Arrastrar un objeto de la lista: hueco donde caería (0..=n) y si se soltó.
+    let mut drop_gap = None;
+    let released = ui.input(|inp| inp.pointer.any_released());
     let n = doc.proyecto.objetos.len();
     for i in 0..n {
         let obj = &doc.proyecto.objetos[i];
@@ -569,7 +620,7 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             label = label.italics().weak();
         }
         let (mut visible, kind) = (obj.visible, obj.puntada.nombre());
-        ui.horizontal(|ui| {
+        let row = ui.horizontal(|ui| {
             if ui
                 .checkbox(&mut visible, "")
                 .on_hover_text("Bordar / ocultar")
@@ -585,7 +636,16 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             }
             let response = ui
                 .selectable_label(doc.seleccion[i], label)
-                .on_hover_text(kind);
+                .on_hover_text(format!(
+                    "{kind} · arrastrar para cambiar el orden de bordado"
+                ))
+                .interact(egui::Sense::click_and_drag());
+            if response.drag_started() {
+                response.dnd_set_drag_payload(i);
+            }
+            if response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
             if response.clicked() {
                 if ui.input(|inp| inp.modifiers.command) {
                     doc.seleccion[i] = !doc.seleccion[i];
@@ -594,18 +654,6 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
                     doc.seleccion.fill(false);
                     doc.seleccion[i] = !only_this;
                 }
-            }
-            if ui
-                .add_enabled(i > 0, egui::Button::new("⏶").small())
-                .clicked()
-            {
-                action = Some((i, -1));
-            }
-            if ui
-                .add_enabled(i + 1 < n, egui::Button::new("⏷").small())
-                .clicked()
-            {
-                action = Some((i, 1));
             }
             if ui
                 .add(egui::Button::new("⧉").small())
@@ -622,24 +670,52 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
                 action = Some((i, 0));
             }
         });
+        if row.response.dnd_hover_payload::<usize>().is_some()
+            && let Some(pos) = ui.ctx().pointer_interact_pos()
+        {
+            let r = row.response.rect;
+            let gap = if pos.y < r.center().y { i } else { i + 1 };
+            let y = if gap == i { r.top() } else { r.bottom() };
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                y,
+                egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+            );
+            drop_gap = Some(gap);
+        }
+    }
+    if let Some(gap) = drop_gap
+        && released
+        && let Some(from) = egui::DragAndDrop::take_payload::<usize>(ui.ctx())
+    {
+        doc.move_object(*from, drop_target(*from, gap));
     }
     if let Some(i) = toggle_visible {
         doc.edit(|p| p.objetos[i].visible = !p.objetos[i].visible);
     }
     match action {
         Some((i, 0)) => doc.remove(i),
-        Some((i, 2)) => doc.duplicate(i),
-        Some((i, d)) => doc.move_object(i, (i as isize + d as isize) as usize),
+        Some((i, _)) => doc.duplicate(i),
         None => {}
     }
     pick
 }
 
+/// Índice final de un objeto que se saca de `from` y se suelta en el hueco `gap` (antes del
+/// objeto `gap`; `n` = al final).
+fn drop_target(from: usize, gap: usize) -> usize {
+    if gap > from { gap - 1 } else { gap }
+}
+
 /// Nombre, forma y puntada de la selección. Devuelve `Some` si se pidió cambiar la fuente
 /// (`Some(None)` = elegir archivo).
+/// Propiedades de la selección. Con varios objetos, los cambios de parámetros se aplican a
+/// los que tienen el mismo tipo de puntada que el primero (solo el valor cambiado).
+/// `pick_color` recibe el objeto cuyo color se quiere cambiar.
 fn properties_section(
     ui: &mut egui::Ui,
     doc: &mut crate::proyecto::ProyectoDoc,
+    pick_color: &mut Option<usize>,
 ) -> Option<Option<PathBuf>> {
     let sel = doc.selection();
     if sel.is_empty() {
@@ -687,6 +763,59 @@ fn properties_section(
     }
 
     if sel.len() > 1 {
+        let [r, g, b] =
+            jef::palette::thread(doc.proyecto.objetos[sel[0]].color).map_or([128; 3], |t| t.rgb);
+        ui.horizontal(|ui| {
+            ui.label("Color");
+            let swatch = egui::Button::new("")
+                .fill(Color32::from_rgb(r, g, b))
+                .min_size(Vec2::new(20.0, 18.0));
+            if ui
+                .add(swatch)
+                .on_hover_text("Cambiar el color de todos")
+                .clicked()
+            {
+                *pick_color = Some(sel[0]);
+            }
+        });
+        let antes = doc.proyecto.objetos[sel[0]].puntada.clone();
+        let mismos = sel
+            .iter()
+            .filter(|&&i| {
+                std::mem::discriminant(&doc.proyecto.objetos[i].puntada)
+                    == std::mem::discriminant(&antes)
+            })
+            .count();
+        if mismos < sel.len() && antes != Puntada::Ninguna {
+            ui.weak(format!(
+                "Los cambios se aplican a los {mismos} objetos con «{}»",
+                antes.nombre()
+            ));
+        }
+        let guias: Vec<usize> = sel
+            .iter()
+            .copied()
+            .filter(|&i| es_guia_zona(&doc.proyecto.objetos[i]))
+            .collect();
+        if let Some(&g) = guias.first() {
+            let mut opacidad = doc.proyecto.objetos[g].opacidad;
+            if opacity_slider(ui, &mut opacidad) {
+                doc.edit_grouped("opacidad varios".into(), |p| {
+                    for &i in &guias {
+                        p.objetos[i].opacidad = opacidad;
+                    }
+                });
+            }
+        }
+        let mut despues = antes.clone();
+        puntada_params(ui, &mut despues);
+        if despues != antes {
+            doc.edit_grouped("props varios".into(), |p| {
+                for &i in &sel {
+                    p.objetos[i].puntada.copiar_cambios(&antes, &despues);
+                }
+            });
+        }
         return None;
     }
     let i = sel[0];
@@ -697,6 +826,9 @@ fn properties_section(
         ui.label("Nombre");
         ui.text_edit_singleline(&mut obj.nombre);
     });
+    if es_guia_zona(&obj) {
+        opacity_slider(ui, &mut obj.opacidad);
+    }
     puntada_params(ui, &mut obj.puntada);
     if let Forma::Texto {
         texto,
@@ -752,6 +884,22 @@ fn properties_section(
         let _ = doc.text_to_path(i);
     }
     font
+}
+
+/// Una guía que es zona: se ve rellena con su color de hilo y esta opacidad.
+fn es_guia_zona(o: &Objeto) -> bool {
+    o.puntada == Puntada::Ninguna && o.es_zona()
+}
+
+/// Opacidad del relleno de una guía. Devuelve si cambió.
+fn opacity_slider(ui: &mut egui::Ui, opacidad: &mut f32) -> bool {
+    ui.horizontal(|ui| {
+        ui.label("Opacidad");
+        ui.add(egui::Slider::new(opacidad, 0.0..=1.0))
+            .on_hover_text("Cómo se ve el relleno de la guía en el editor; no se borda")
+            .changed()
+    })
+    .inner
 }
 
 /// Controles de los parámetros de una puntada.
@@ -821,4 +969,22 @@ fn puntada_params(ui: &mut egui::Ui, puntada: &mut Puntada) {
                 ui.end_row();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drop_target_accounts_for_removal() {
+        assert_eq!(drop_target(0, 0), 0);
+        assert_eq!(
+            drop_target(0, 1),
+            0,
+            "justo debajo de sí mismo: no se mueve"
+        );
+        assert_eq!(drop_target(0, 3), 2, "antes del objeto 3 = queda en 2");
+        assert_eq!(drop_target(3, 0), 0);
+        assert_eq!(drop_target(1, 4), 3, "al final de 4");
+    }
 }

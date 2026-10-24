@@ -60,6 +60,20 @@ pub struct Objeto {
     pub color: i32,
     pub forma: Forma,
     pub puntada: Puntada,
+    /// Opacidad (0–1) del relleno con que se ve una guía en el editor; no afecta al bordado.
+    #[serde(default = "opacidad_guia", skip_serializing_if = "es_opacidad_guia")]
+    pub opacidad: f32,
+}
+
+/// Opacidad con que se ven las guías si no se elige otra: muy traslúcidas.
+pub const OPACIDAD_GUIA: f32 = 0.15;
+
+fn opacidad_guia() -> f32 {
+    OPACIDAD_GUIA
+}
+
+fn es_opacidad_guia(o: &f32) -> bool {
+    *o == OPACIDAD_GUIA
 }
 
 fn si() -> bool {
@@ -138,6 +152,85 @@ impl Puntada {
             Puntada::Corrido { .. } => "Pespunte",
             Puntada::Satin { .. } => "Satín",
             Puntada::Relleno { .. } => "Relleno",
+        }
+    }
+
+    /// Copia a `self` solo los parámetros que cambiaron de `antes` a `despues` (los tres del
+    /// mismo tipo; si no, no hace nada). Sirve para editar varios objetos a la vez sin pisar lo
+    /// que cada uno tiene distinto.
+    pub fn copiar_cambios(&mut self, antes: &Puntada, despues: &Puntada) {
+        fn copiar<T: PartialEq + Copy>(destino: &mut T, antes: T, despues: T) {
+            if antes != despues {
+                *destino = despues;
+            }
+        }
+        use Puntada as P;
+        match (self, antes, despues) {
+            (
+                P::Corrido { largo, triple },
+                P::Corrido {
+                    largo: l0,
+                    triple: t0,
+                },
+                P::Corrido {
+                    largo: l1,
+                    triple: t1,
+                },
+            ) => {
+                copiar(largo, *l0, *l1);
+                copiar(triple, *t0, *t1);
+            }
+            (
+                P::Satin {
+                    ancho,
+                    densidad,
+                    base,
+                },
+                P::Satin {
+                    ancho: a0,
+                    densidad: d0,
+                    base: b0,
+                },
+                P::Satin {
+                    ancho: a1,
+                    densidad: d1,
+                    base: b1,
+                },
+            ) => {
+                copiar(ancho, *a0, *a1);
+                copiar(densidad, *d0, *d1);
+                copiar(base, *b0, *b1);
+            }
+            (
+                P::Relleno {
+                    angulo,
+                    separacion,
+                    largo,
+                    base,
+                    compensacion,
+                },
+                P::Relleno {
+                    angulo: a0,
+                    separacion: s0,
+                    largo: l0,
+                    base: b0,
+                    compensacion: c0,
+                },
+                P::Relleno {
+                    angulo: a1,
+                    separacion: s1,
+                    largo: l1,
+                    base: b1,
+                    compensacion: c1,
+                },
+            ) => {
+                copiar(angulo, *a0, *a1);
+                copiar(separacion, *s0, *s1);
+                copiar(largo, *l0, *l1);
+                copiar(base, *b0, *b1);
+                copiar(compensacion, *c0, *c1);
+            }
+            _ => {}
         }
     }
 }
@@ -337,6 +430,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn copy_changes_keeps_other_fields() {
+        let relleno = |angulo, separacion| Puntada::Relleno {
+            angulo,
+            separacion,
+            largo: 4.0,
+            base: true,
+            compensacion: 0.2,
+        };
+        // Solo cambió la separación: el ángulo propio del destino se conserva.
+        let mut destino = relleno(45.0, 0.4);
+        destino.copiar_cambios(&relleno(0.0, 0.4), &relleno(0.0, 0.6));
+        assert_eq!(destino, relleno(45.0, 0.6));
+
+        // Otro tipo: no se toca.
+        let mut satin = PRESETS[3].1.clone();
+        satin.copiar_cambios(&relleno(0.0, 0.4), &relleno(0.0, 0.6));
+        assert_eq!(satin, PRESETS[3].1);
+    }
+
+    #[test]
     fn json_roundtrip() {
         let mut p = Proyecto::default();
         p.objetos.push(Objeto {
@@ -347,6 +460,7 @@ mod tests {
                 d: BezPath::from_svg("M0,0 L10.5,0 L10.5,-3.25 Q5,2 0,0 Z").unwrap(),
             },
             puntada: PRESETS[5].1.clone(),
+            opacidad: OPACIDAD_GUIA,
         });
         p.objetos.push(Objeto {
             nombre: "texto".into(),
@@ -360,6 +474,7 @@ mod tests {
                 afin: Affine::translate((1.0, 2.0)).as_coeffs(),
             },
             puntada: Puntada::Ninguna,
+            opacidad: OPACIDAD_GUIA,
         });
         let text = p.guardar();
         assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
@@ -397,6 +512,7 @@ mod tests {
                 d: BezPath::from_svg("M0,0 L1.5,2").unwrap(),
             },
             puntada: PRESETS[1].1.clone(),
+            opacidad: OPACIDAD_GUIA,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert_eq!(pegar_objetos(&text), Some(vec![o]));

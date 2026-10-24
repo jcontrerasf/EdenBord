@@ -54,6 +54,19 @@ pub fn polilineas(path: &BezPath) -> Vec<Polilinea> {
     out
 }
 
+/// Separa un trazado en sus subtrazados (uno por cada `M`). Descarta los que no dibujan nada.
+pub fn subtrazados(path: &BezPath) -> Vec<BezPath> {
+    let mut out: Vec<BezPath> = Vec::new();
+    for el in path.elements() {
+        if matches!(el, PathEl::MoveTo(_)) || out.is_empty() {
+            out.push(BezPath::new());
+        }
+        out.last_mut().unwrap().push(*el);
+    }
+    out.retain(|d| d.elements().len() >= 2);
+    out
+}
+
 /// Puntos de la polilínea en orden de recorrido; si es cerrada, termina repitiendo el primero.
 pub fn recorrido(pl: &Polilinea) -> Vec<Point> {
     let mut v = pl.puntos.clone();
@@ -151,6 +164,15 @@ mod tests {
         assert!(pls[0].cerrada && pls[0].puntos.len() == 3);
         assert!(!pls[1].cerrada && pls[1].puntos.len() == 2);
         assert_eq!(recorrido(&pls[0]).last(), Some(&Point::ZERO));
+    }
+
+    #[test]
+    fn splits_subpaths() {
+        let path = BezPath::from_svg("M0,0 L10,0 L10,10 Z M2,2 L3,2 L3,3 Z M7,7").unwrap();
+        let partes = subtrazados(&path);
+        assert_eq!(partes.len(), 2, "el M suelto no cuenta");
+        assert_eq!(partes[0].to_svg(), "M0,0 L10,0 L10,10 Z");
+        assert_eq!(partes[1].to_svg(), "M2,2 L3,2 L3,3 Z");
     }
 
     #[test]

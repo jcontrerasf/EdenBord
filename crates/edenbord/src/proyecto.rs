@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use bordado::geom::{Polilinea, polilineas};
-use bordado::{Forma, Generado, Objeto, Proyecto};
+use bordado::booleanas::{self, Booleana};
+use bordado::geom::{self, Polilinea, polilineas};
+use bordado::{Forma, Generado, Objeto, Proyecto, Puntada};
 use jef::Bounds;
 use kurbo::{Affine, Point, Rect};
 
@@ -24,6 +25,8 @@ pub struct ProyectoDoc {
     pub generado: Generado,
     /// Formas de cada objeto como polilíneas (mm), para dibujar y elegir con el clic.
     pub lineas: Vec<Vec<Polilinea>>,
+    /// Relleno de las guías que son zonas, en trapecios (mm), para verlas con sus agujeros.
+    pub relleno_guias: Vec<Vec<[Point; 4]>>,
     /// Versiones anteriores y siguientes, cada una con su selección.
     undo: Vec<(Proyecto, Vec<bool>)>,
     redo: Vec<(Proyecto, Vec<bool>)>,
@@ -42,6 +45,7 @@ impl ProyectoDoc {
             dirty: false,
             generado,
             lineas: vec![],
+            relleno_guias: vec![],
             undo: vec![],
             redo: vec![],
             last_key: None,
@@ -136,6 +140,19 @@ impl ProyectoDoc {
             .iter()
             .map(|o| o.trazado().map(|d| polilineas(&d)).unwrap_or_default())
             .collect();
+        self.relleno_guias = self
+            .proyecto
+            .objetos
+            .iter()
+            .zip(&self.lineas)
+            .map(|(o, pls)| {
+                if o.puntada == Puntada::Ninguna && o.es_zona() {
+                    trapecios(pls)
+                } else {
+                    vec![]
+                }
+            })
+            .collect();
         self.seleccion.resize(self.proyecto.objetos.len(), false);
     }
 
@@ -176,7 +193,7 @@ impl ProyectoDoc {
     /// Objetos visibles cuyas formas caben enteras en `r` (mm).
     pub fn objects_in(&self, r: Rect) -> Vec<usize> {
         (0..self.proyecto.objetos.len())
-            .filter(|&i| self.proyecto.objetos[i].visible || self.seleccion[i])
+            .filter(|&i| self.proyecto.objetos[i].visible)
             .filter(|&i| {
                 self.rect_of(&[i])
                     .is_some_and(|o| crate::gestos::contiene(r, o))
@@ -220,18 +237,35 @@ impl ProyectoDoc {
 
     /// Objeto bajo el punto (mm): el último en el orden que lo contenga (zonas) o que pase a
     /// menos de `tol` (bordes y líneas).
+    ///
+    /// Primero cuenta el borde (el de más arriba en el orden); si el punto no toca ningún
+    /// borde, gana la zona más chica que lo contiene, así se puede elegir una forma que está
+    /// dentro de otra más grande. Los objetos ocultos no se eligen.
     pub fn object_at(&self, p: Point, tol: f64) -> Option<usize> {
-        (0..self.proyecto.objetos.len()).rev().find(|&i| {
-            let pls = &self.lineas[i];
-            let near = pls.iter().any(|pl| {
+        let visibles = || {
+            (0..self.proyecto.objetos.len())
+                .rev()
+                .filter(|&i| self.proyecto.objetos[i].visible)
+        };
+        let near = |i: usize| {
+            self.lineas[i].iter().any(|pl| {
                 let n = pl.puntos.len();
                 let segs = if pl.cerrada { n } else { n - 1 };
                 (0..segs).any(|k| {
                     let seg = kurbo::Line::new(pl.puntos[k], pl.puntos[(k + 1) % n]);
                     kurbo::ParamCurveNearest::nearest(&seg, p, 1e-6).distance_sq < tol * tol
                 })
-            });
-            near || (self.proyecto.objetos[i].es_zona() && inside_even_odd(pls, p))
+            })
+        };
+        visibles().find(|&i| near(i)).or_else(|| {
+            visibles()
+                .filter(|&i| {
+                    self.proyecto.objetos[i].es_zona() && inside_even_odd(&self.lineas[i], p)
+                })
+                .min_by(|&a, &b| {
+                    let area = |i| self.rect_of(&[i]).map_or(0.0, |r| r.area());
+                    area(a).total_cmp(&area(b))
+                })
         })
     }
 
@@ -313,6 +347,100 @@ impl ProyectoDoc {
         self.seleccion = vec![false; self.proyecto.objetos.len()];
         self.seleccion[first] = true;
         true
+    }
+
+    /// Cuántos subtrazados tiene el objeto si es un contorno o una línea (0 si es texto).
+    pub fn subpaths(&self, i: usize) -> usize {
+        match &self.proyecto.objetos[i].forma {
+            Forma::Contorno { d } | Forma::Linea { d } => geom::subtrazados(d).len(),
+            Forma::Texto { .. } => 0,
+        }
+    }
+
+    /// Separa cada contorno o línea seleccionado en un objeto por subtrazado, en su mismo lugar
+    /// del orden de bordado (los agujeros pasan a ser zonas aparte). Deja seleccionadas las
+    /// partes. Devuelve si separó algo.
+    pub fn split(&mut self) -> bool {
+        let sel: Vec<usize> = self
+            .selection()
+            .into_iter()
+            .filter(|&i| self.subpaths(i) > 1)
+            .collect();
+        if sel.is_empty() {
+            return false;
+        }
+        let mut seleccion = self.seleccion.clone();
+        self.edit(|p| {
+            for &i in sel.iter().rev() {
+                let original = p.objetos.remove(i);
+                let (Forma::Contorno { d } | Forma::Linea { d }) = &original.forma else {
+                    unreachable!("solo se separan trazados");
+                };
+                let partes: Vec<Objeto> = geom::subtrazados(d)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, d)| Objeto {
+                        nombre: format!("{} {}", original.nombre, k + 1),
+                        forma: match original.forma {
+                            Forma::Linea { .. } => Forma::Linea { d },
+                            _ => Forma::Contorno { d },
+                        },
+                        ..original.clone()
+                    })
+                    .collect();
+                let n = partes.len();
+                p.objetos.splice(i..i, partes);
+                seleccion.splice(i..=i, std::iter::repeat_n(true, n));
+            }
+        });
+        self.seleccion = seleccion;
+        true
+    }
+
+    /// Operación booleana entre los contornos seleccionados, en orden de bordado.
+    /// Restar recorta el primero con los demás, que se conservan; las otras operaciones dejan
+    /// el resultado en lugar del primero (con sus propiedades) y borran los demás.
+    pub fn boolean(&mut self, op: Booleana) -> Result<(), &'static str> {
+        let sel: Vec<usize> = self
+            .selection()
+            .into_iter()
+            .filter(|&i| matches!(self.proyecto.objetos[i].forma, Forma::Contorno { .. }))
+            .collect();
+        if sel.len() < 2 {
+            return Err(
+                "Selecciona al menos dos zonas (los textos se convierten primero en trazado)",
+            );
+        }
+        let zonas = sel.iter().map(|&i| match &self.proyecto.objetos[i].forma {
+            Forma::Contorno { d } => d,
+            _ => unreachable!("solo contornos"),
+        });
+        let d = booleanas::operar_varias(op, zonas).unwrap_or_default();
+        if d.elements().is_empty() {
+            return Err(match op {
+                Booleana::Restar => {
+                    "El resultado queda vacío: Restar recorta la zona que se borda primero \
+                     (la de más arriba en la lista) con las demás, y esas la tapan entera. \
+                     Arrastra el fondo al primer lugar de la lista"
+                }
+                Booleana::Intersecar => "El resultado queda vacío: las zonas no se tocan",
+                _ => "El resultado queda vacío",
+            });
+        }
+        let (first, rest) = (sel[0], &sel[1..]);
+        self.edit(|p| {
+            p.objetos[first].forma = Forma::Contorno { d };
+            if op != Booleana::Restar {
+                let mut i = 0;
+                p.objetos.retain(|_| {
+                    i += 1;
+                    !rest.contains(&(i - 1))
+                });
+            }
+        });
+        self.seleccion = vec![false; self.proyecto.objetos.len()];
+        self.seleccion[first] = true;
+        Ok(())
     }
 
     /// Borra los objetos seleccionados (si no hay selección, no borra nada).
@@ -477,10 +605,58 @@ fn inside_even_odd(pls: &[Polilinea], p: Point) -> bool {
     inside
 }
 
+/// Descompone la zona (regla par-impar; todas las polilíneas cuentan como cerradas) en
+/// trapecios de bases horizontales: `[arriba-izq, arriba-der, abajo-der, abajo-izq]`.
+pub fn trapecios(pls: &[Polilinea]) -> Vec<[Point; 4]> {
+    // Lados no horizontales, de arriba hacia abajo, ordenados por donde empiezan.
+    let mut lados: Vec<(Point, Point)> = pls
+        .iter()
+        .filter(|pl| pl.puntos.len() >= 3)
+        .flat_map(|pl| {
+            let n = pl.puntos.len();
+            (0..n).map(move |k| (pl.puntos[k], pl.puntos[(k + 1) % n]))
+        })
+        .filter(|(a, b)| a.y != b.y)
+        .map(|(a, b)| if a.y < b.y { (a, b) } else { (b, a) })
+        .collect();
+    lados.sort_by(|a, b| a.0.y.total_cmp(&b.0.y));
+    let mut ys: Vec<f64> = lados.iter().flat_map(|(a, b)| [a.y, b.y]).collect();
+    ys.sort_by(f64::total_cmp);
+    ys.dedup();
+
+    let x_en = |(a, b): (Point, Point), y: f64| a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y);
+    let mut out = Vec::new();
+    let mut activos: Vec<(Point, Point)> = Vec::new();
+    let mut siguiente = 0;
+    for w in ys.windows(2) {
+        let (y0, y1) = (w[0], w[1]);
+        while siguiente < lados.len() && lados[siguiente].0.y <= y0 {
+            activos.push(lados[siguiente]);
+            siguiente += 1;
+        }
+        activos.retain(|l| l.1.y > y0);
+        let ym = (y0 + y1) / 2.0;
+        let mut cruces: Vec<(f64, f64, f64)> = activos
+            .iter()
+            .map(|&l| (x_en(l, ym), x_en(l, y0), x_en(l, y1)))
+            .collect();
+        cruces.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for &[a, b] in cruces.as_chunks::<2>().0 {
+            out.push([
+                Point::new(a.1, y0),
+                Point::new(b.1, y0),
+                Point::new(b.2, y1),
+                Point::new(a.2, y1),
+            ]);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bordado::{PRESETS, Puntada};
+    use bordado::PRESETS;
     use kurbo::BezPath;
 
     fn doc() -> ProyectoDoc {
@@ -492,6 +668,7 @@ mod tests {
                 d: BezPath::from_svg(d).unwrap(),
             },
             puntada,
+            opacidad: bordado::OPACIDAD_GUIA,
         };
         let mut p = Proyecto::default();
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.
@@ -512,6 +689,53 @@ mod tests {
         assert_eq!(d.object_at(Point::new(17.0, 17.0), 0.1), None, "agujero");
         assert_eq!(d.object_at(Point::new(10.05, 17.0), 0.1), Some(0), "borde");
         assert_eq!(d.object_at(Point::new(40.0, 5.0), 0.1), None);
+    }
+
+    #[test]
+    fn trapezoids_cover_zone_minus_holes() {
+        let area = |ts: &[[Point; 4]]| -> f64 {
+            ts.iter()
+                .map(|t| ((t[1].x - t[0].x) + (t[2].x - t[3].x)) / 2.0 * (t[3].y - t[0].y))
+                .sum()
+        };
+        let d = doc();
+        assert!(
+            (area(&trapecios(&d.lineas[0])) - 800.0).abs() < 1e-9,
+            "30² − 10²"
+        );
+        let circulo = BezPath::from_svg("M10,0 A10,10 0 1 1 -10,0 A10,10 0 1 1 10,0 Z").unwrap();
+        let a = area(&trapecios(&polilineas(&circulo)));
+        assert!((a - std::f64::consts::PI * 100.0).abs() < 1.0, "{a}");
+        // Solo las guías que son zonas se rellenan.
+        assert!(d.relleno_guias[0].is_empty());
+        assert!(!d.relleno_guias[1].is_empty());
+    }
+
+    #[test]
+    fn picking_prefers_smaller_inner_shape_and_skips_hidden() {
+        let mut d = doc();
+        // Un disco grande encima de todo (sin agujero) tapa al cuadrado chico.
+        d.edit(|p| {
+            let mut o = p.objetos[1].clone();
+            o.forma = Forma::Contorno {
+                d: kurbo::BezPath::from_svg("M-5,-5 L40,-5 L40,40 L-5,40 Z").unwrap(),
+            };
+            p.objetos.push(o);
+        });
+        assert_eq!(
+            d.object_at(Point::new(13.0, 13.0), 0.1),
+            Some(1),
+            "el más chico"
+        );
+        assert_eq!(d.object_at(Point::new(17.0, 17.0), 0.1), Some(2));
+        assert_eq!(d.object_at(Point::new(10.05, 17.0), 0.1), Some(0), "borde");
+        d.edit(|p| p.objetos[1].visible = false);
+        assert_eq!(d.object_at(Point::new(13.0, 13.0), 0.1), Some(2), "oculto");
+        assert_eq!(
+            d.object_at(Point::new(12.0, 13.0), 0.1),
+            Some(2),
+            "ni su borde"
+        );
     }
 
     #[test]
@@ -603,5 +827,54 @@ mod tests {
         assert_eq!(d.object_at(Point::new(13.0, 13.0), 0.1), Some(0));
         d.seleccion.fill(true);
         assert!(!d.combine(), "uno solo no se combina");
+    }
+
+    #[test]
+    fn split_undoes_combine() {
+        let mut d = doc();
+        d.seleccion[0] = true;
+        assert!(d.split());
+        assert_eq!(d.proyecto.objetos.len(), 3);
+        assert_eq!(
+            d.selection(),
+            vec![0, 1],
+            "las dos partes, en el lugar del original"
+        );
+        assert_eq!(d.proyecto.objetos[0].nombre, "x 1");
+        assert_eq!(d.proyecto.objetos[1].puntada, d.proyecto.objetos[0].puntada);
+        // El borde exterior quedó lleno: ya no tiene agujero.
+        assert_eq!(d.object_at(Point::new(17.0, 17.0), 0.1), Some(1));
+        assert!(!d.split(), "ya no hay nada que separar");
+        assert!(d.combine());
+        assert_eq!(d.subpaths(0), 2);
+        d.undo();
+        d.undo();
+        assert_eq!(d.proyecto.objetos.len(), 2);
+    }
+
+    #[test]
+    fn subtract_keeps_the_pieces_on_top() {
+        let mut d = doc();
+        d.seleccion[0] = true;
+        d.split();
+        // Partes: 0 = cuadrado de 30 lleno, 1 = el ex agujero, 2 = el cuadrado chico.
+        d.seleccion.fill(false);
+        d.seleccion[0] = true;
+        d.seleccion[2] = true;
+        d.boolean(Booleana::Restar).unwrap();
+        assert_eq!(d.proyecto.objetos.len(), 3);
+        assert_eq!(d.selection(), vec![0]);
+        assert_eq!(
+            d.object_at(Point::new(13.0, 13.0), 0.1),
+            Some(2),
+            "hueco en el fondo"
+        );
+
+        d.seleccion.fill(true);
+        d.boolean(Booleana::Unir).unwrap();
+        assert_eq!(d.proyecto.objetos.len(), 1);
+        d.seleccion.fill(false);
+        d.seleccion[0] = true;
+        assert!(d.boolean(Booleana::Unir).is_err(), "una sola zona");
     }
 }

@@ -3,7 +3,7 @@
 
 use kurbo::{Affine, BezPath, Point, Shape};
 
-use crate::proyecto::{Forma, Objeto, Puntada};
+use crate::proyecto::{Forma, OPACIDAD_GUIA, Objeto, Puntada};
 
 /// Milímetros por unidad de usuario de SVG (96 por pulgada, como usan usvg y los navegadores).
 const MM_POR_PX: f64 = 25.4 / 96.0;
@@ -119,6 +119,7 @@ fn objeto(p: &usvg::Path, n: usize) -> Option<Objeto> {
         color,
         forma,
         puntada: Puntada::Ninguna,
+        opacidad: OPACIDAD_GUIA,
     })
 }
 

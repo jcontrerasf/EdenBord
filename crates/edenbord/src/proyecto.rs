@@ -190,10 +190,16 @@ impl ProyectoDoc {
         }
     }
 
-    /// Objetos visibles cuyas formas caben enteras en `r` (mm).
+    /// Objetos que se pueden elegir en el lienzo (visibles y sin candado).
+    pub fn elegible(&self, i: usize) -> bool {
+        let o = &self.proyecto.objetos[i];
+        o.visible && !o.bloqueado
+    }
+
+    /// Objetos elegibles cuyas formas caben enteras en `r` (mm).
     pub fn objects_in(&self, r: Rect) -> Vec<usize> {
         (0..self.proyecto.objetos.len())
-            .filter(|&i| self.proyecto.objetos[i].visible)
+            .filter(|&i| self.elegible(i))
             .filter(|&i| {
                 self.rect_of(&[i])
                     .is_some_and(|o| crate::gestos::contiene(r, o))
@@ -240,12 +246,12 @@ impl ProyectoDoc {
     ///
     /// Primero cuenta el borde (el de más arriba en el orden); si el punto no toca ningún
     /// borde, gana la zona más chica que lo contiene, así se puede elegir una forma que está
-    /// dentro de otra más grande. Los objetos ocultos no se eligen.
+    /// dentro de otra más grande. Los objetos ocultos o bloqueados no se eligen.
     pub fn object_at(&self, p: Point, tol: f64) -> Option<usize> {
         let visibles = || {
             (0..self.proyecto.objetos.len())
                 .rev()
-                .filter(|&i| self.proyecto.objetos[i].visible)
+                .filter(|&i| self.elegible(i))
         };
         let near = |i: usize| {
             self.lineas[i].iter().any(|pl| {
@@ -669,6 +675,7 @@ mod tests {
             },
             puntada,
             opacidad: bordado::OPACIDAD_GUIA,
+            bloqueado: false,
         };
         let mut p = Proyecto::default();
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.

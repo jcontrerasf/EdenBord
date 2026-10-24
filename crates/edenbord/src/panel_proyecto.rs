@@ -1,4 +1,4 @@
-//! Panel lateral de un proyecto `.edenbord`: objetos, tipo de puntada, guardar y exportar.
+//! Panel derecho de un proyecto `.edenbord` (objetos y propiedades), guardar y exportar.
 
 use std::path::PathBuf;
 
@@ -9,111 +9,82 @@ use jef::{Hoop, StitchKind};
 use kurbo::{Affine, Point, Shape};
 
 use crate::tema::AVISO as WARNING;
-use crate::{Editor, Tool, file_name, iconos, tema, write_verified};
+use crate::{Editor, Tool, file_name, iconos, lista, tema, write_verified};
 
 impl Editor {
+    /// Panel derecho de un proyecto: objetos arriba, propiedades abajo.
     pub(crate) fn proyecto_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(doc) = &mut self.proyecto else {
-            return;
-        };
-        let mut name = doc.path.as_deref().map_or(doc.nombre.clone(), file_name);
-        if doc.dirty {
-            name.push_str(" •");
-        }
-        ui.heading(name);
-        let mut save = None;
-        let mut export = false;
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .button(format!("{} Guardar", iconos::GUARDAR))
-                .on_hover_text("Ctrl+S · proyecto editable .edenbord")
-                .clicked()
-            {
-                save = Some(false);
-            }
-            if ui.button("Guardar como…").clicked() {
-                save = Some(true);
-            }
-            if tema::boton_principal(ui, iconos::EXPORTAR, "Exportar JEF…")
-                .on_hover_text("Genera las puntadas para la máquina")
-                .clicked()
-            {
-                export = true;
-            }
-        });
-        ui.horizontal(|ui| {
-            if tema::boton_icono_si(ui, doc.can_undo(), iconos::DESHACER, "Deshacer (Ctrl+Z)")
-                .clicked()
-            {
-                doc.undo();
-            }
-            if tema::boton_icono_si(ui, doc.can_redo(), iconos::REHACER, "Rehacer (Ctrl+Y)")
-                .clicked()
-            {
-                doc.redo();
-            }
-        });
-        let mut import = false;
-        let mut text = false;
-        ui.horizontal(|ui| {
-            import = ui
-                .button(format!("{} Importar SVG…", iconos::SVG))
-                .clicked();
-            text = ui
-                .button(format!("{} Agregar texto…", iconos::TEXTO))
-                .clicked();
-        });
-        if let Some(ask) = save {
-            self.save_project(ask);
-        }
-        if export {
-            self.export_jef();
-        }
-        if import {
-            self.import_svg();
-        }
-        if text {
-            self.add_text();
-        }
-        ui.separator();
+        let n = self
+            .proyecto
+            .as_ref()
+            .map_or(0, |d| d.proyecto.objetos.len());
+        egui::Panel::top("lista_objetos")
+            .resizable(true)
+            .default_size(260.0)
+            .min_size(80.0)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 6)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    tema::titulo(ui, &format!("Objetos · {n}"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let doc = self.proyecto.as_mut().unwrap();
+                        if ui.small_button("ninguno").clicked() {
+                            doc.seleccion.fill(false);
+                        }
+                        if ui.small_button("todos").clicked() {
+                            doc.seleccion.fill(true);
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("objetos")
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        let doc = self.proyecto.as_mut().unwrap();
+                        if let Some(i) = objects_section(ui, doc) {
+                            self.picking_color = Some(i);
+                        }
+                    })
+                    .inner
+            });
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let doc = self.proyecto.as_mut().unwrap();
-            info_section(ui, doc);
-            ui.separator();
-            if self.tool == Tool::Nodes {
-                self.nodes_section(ui);
+        egui::ScrollArea::vertical()
+            .id_salt("propiedades")
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                if self.tool == Tool::Nodes {
+                    self.nodes_section(ui);
+                    ui.separator();
+                }
+                self.trace_section(ui);
+                let doc = self.proyecto.as_mut().unwrap();
+                if let Some(path) = properties_section(ui, doc, &mut self.picking_color) {
+                    self.change_font(path);
+                }
                 ui.separator();
-            }
-            self.trace_section(ui);
-            ui.separator();
-            let doc = self.proyecto.as_mut().unwrap();
-            if let Some(i) = objects_section(ui, doc) {
-                self.picking_color = Some(i);
-            }
-            ui.separator();
-            let doc = self.proyecto.as_mut().unwrap();
-            if let Some(path) = properties_section(ui, doc, &mut self.picking_color) {
-                self.change_font(path);
-            }
-            ui.separator();
-            let doc = self.proyecto.as_ref().unwrap();
-            let label = if doc.selection().is_empty() {
-                "Transformar (todo el proyecto)"
-            } else {
-                "Transformar (selección)"
-            };
-            if let Some(op) = self.transform_section(ui, label, false) {
-                crate::apply_proyecto(self.proyecto.as_mut().unwrap(), op);
-            }
-            ui.separator();
-            self.view_sections(ui);
-        });
+                let doc = self.proyecto.as_ref().unwrap();
+                let label = if doc.selection().is_empty() {
+                    "Transformar todo"
+                } else {
+                    "Transformar selección"
+                };
+                if let Some(op) = self.transform_section(ui, label, false) {
+                    crate::apply_proyecto(self.proyecto.as_mut().unwrap(), op);
+                }
+                ui.separator();
+                tema::titulo(ui, "Diseño");
+                info_section(ui, self.proyecto.as_mut().unwrap());
+                if self.proyecto.as_ref().unwrap().proyecto.fondo.is_some() {
+                    ui.separator();
+                    self.fondo_section(ui);
+                }
+            });
     }
 
     /// Ayuda y acciones de la herramienta de nodos.
     fn nodes_section(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Nodos");
+        tema::titulo(ui, "Nodos");
         let doc = self.proyecto.as_mut().unwrap();
         let Some(i) = doc.editable() else {
             ui.small("Elige un contorno o una línea (clic en el lienzo) para editar sus nodos.");
@@ -150,15 +121,10 @@ impl Editor {
         });
     }
 
-    /// Sección "Calcar": imagen de fondo y herramienta pluma.
+    /// Acciones de la pluma y de trazados (combinar, separar, booleanas), si vienen al caso.
     fn trace_section(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Calcar");
-        if self.tool != Tool::Pen {
-            ui.small(format!(
-                "Elige {} Pluma en la barra del lienzo para dibujar contornos.",
-                iconos::PLUMA
-            ));
-        } else {
+        if self.tool == Tool::Pen {
+            tema::titulo(ui, "Pluma");
             ui.small(
                 "Clic: vértice en esquina · arrastrar: vértice con curva · clic en el primero: \
                  cerrar zona · Enter: terminar línea · Retroceso o Ctrl+Z: borrar vértice · Esc: \
@@ -245,13 +211,16 @@ impl Editor {
                 self.error(e);
             }
         }
+    }
 
+    /// Imagen de fondo para calcar.
+    fn fondo_section(&mut self, ui: &mut egui::Ui) {
+        tema::titulo(ui, "Imagen de fondo");
         let doc = self.proyecto.as_mut().unwrap();
         let mut pick = false;
         ui.horizontal(|ui| {
-            ui.label(format!("{} Imagen de fondo", iconos::IMAGEN));
-            pick = ui.button("Elegir…").clicked();
-            if doc.proyecto.fondo.is_some() && ui.button("Quitar").clicked() {
+            pick = ui.button(format!("{} Cambiar…", iconos::IMAGEN)).clicked();
+            if ui.button(format!("{} Quitar", iconos::BORRAR)).clicked() {
                 doc.edit(|p| p.fondo = None);
             }
         });
@@ -293,7 +262,7 @@ impl Editor {
         }
     }
 
-    fn pick_fondo(&mut self) {
+    pub(crate) fn pick_fondo(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter(
                 "Imagen",
@@ -371,6 +340,7 @@ impl Editor {
             forma,
             puntada: Puntada::Ninguna,
             opacidad: bordado::OPACIDAD_GUIA,
+            bloqueado: false,
         }]);
         self.pen = Default::default();
     }
@@ -426,7 +396,7 @@ impl Editor {
         }
     }
 
-    fn export_jef(&mut self) {
+    pub(crate) fn export_jef(&mut self) {
         let Some(doc) = &self.proyecto else {
             return;
         };
@@ -448,7 +418,7 @@ impl Editor {
         }
     }
 
-    fn import_svg(&mut self) {
+    pub(crate) fn import_svg(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Vector SVG", &["svg", "SVG"])
             .pick_file()
@@ -481,7 +451,7 @@ impl Editor {
     }
 
     /// Agrega un texto centrado en el bastidor, con relleno.
-    fn add_text(&mut self) {
+    pub(crate) fn add_text(&mut self) {
         let Some(fuente) = self.last_font.clone().or_else(|| self.pick_font()) else {
             return;
         };
@@ -498,6 +468,7 @@ impl Editor {
             },
             puntada: preset("Relleno horizontal"),
             opacidad: bordado::OPACIDAD_GUIA,
+            bloqueado: false,
         };
         match obj.trazado() {
             Ok(d) => {
@@ -589,129 +560,103 @@ fn info_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) {
 
 /// Lista de objetos. Devuelve el objeto cuyo color se quiere cambiar, si alguno.
 fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) -> Option<usize> {
-    ui.horizontal(|ui| {
-        ui.strong("Objetos");
-        if ui.small_button("todos").clicked() {
-            doc.seleccion.fill(true);
-        }
-        if ui.small_button("ninguno").clicked() {
-            doc.seleccion.fill(false);
-        }
-    });
-    ui.small(
-        "Clic aquí o en el lienzo: seleccionar · Ctrl/Shift+clic: agregar · arrastrar en el \
-         vacío: elegir con un rectángulo · Ctrl+C/X/V: copiar, cortar, pegar (Ctrl+Shift+V: en \
-         el mismo lugar) · Ctrl+D: duplicar · Ctrl+A: todo · Supr: borrar",
-    );
     if doc.proyecto.objetos.is_empty() {
-        ui.label("Sin objetos: importa un SVG o agrega un texto.");
+        ui.weak("Sin objetos: importa un SVG, agrega un texto o dibuja con la pluma.");
+        return None;
     }
-
     let mut pick = None;
-    let mut action: Option<(usize, i8)> = None;
-    let mut toggle_visible = None;
-    // Arrastrar un objeto de la lista: hueco donde caería (0..=n) y si se soltó.
-    let mut drop_gap = None;
-    let released = ui.input(|inp| inp.pointer.any_released());
+    // (objeto, acción): 0 borrar, 1 duplicar, 2 ver/ocultar, 3 bloquear/desbloquear.
+    let mut action: Option<(usize, u8)> = None;
+    let mut gap = None;
     let n = doc.proyecto.objetos.len();
     for i in 0..n {
         let obj = &doc.proyecto.objetos[i];
         let [r, g, b] = jef::palette::thread(obj.color).map_or([128; 3], |t| t.rgb);
-        let icon = match obj.forma {
-            Forma::Contorno { .. } => iconos::ZONA,
-            Forma::Linea { .. } => iconos::LINEA,
-            Forma::Texto { .. } => iconos::TEXTO,
+        let icon = match obj.puntada {
+            Puntada::Ninguna => iconos::GUIA,
+            Puntada::Corrido { .. } => iconos::CORRIDO,
+            Puntada::Satin { .. } => iconos::SATIN,
+            Puntada::Relleno { .. } => iconos::RELLENO,
         };
-        let mut label = egui::RichText::new(format!("{icon} {}. {}", i + 1, obj.nombre));
+        let mut label = egui::RichText::new(&obj.nombre);
         if obj.puntada == Puntada::Ninguna {
-            label = label.italics().weak();
+            label = label.italics().color(tema::TEXTO_SUAVE);
         }
-        let (mut visible, kind) = (obj.visible, obj.puntada.nombre());
-        let row = ui.horizontal(|ui| {
-            if ui
-                .checkbox(&mut visible, "")
-                .on_hover_text("Bordar / ocultar")
-                .changed()
-            {
-                toggle_visible = Some(i);
-            }
-            let swatch = egui::Button::new("")
-                .fill(Color32::from_rgb(r, g, b))
-                .min_size(Vec2::new(20.0, 18.0));
-            if ui.add(swatch).on_hover_text("Cambiar color").clicked() {
-                pick = Some(i);
-            }
-            let response = ui
-                .selectable_label(doc.seleccion[i], label)
-                .on_hover_text(format!(
-                    "{kind} · arrastrar para cambiar el orden de bordado"
-                ))
-                .interact(egui::Sense::click_and_drag());
-            if response.drag_started() {
-                response.dnd_set_drag_payload(i);
-            }
-            if response.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            }
-            if response.clicked() {
-                if ui.input(|inp| inp.modifiers.command) {
-                    doc.seleccion[i] = !doc.seleccion[i];
-                } else {
-                    let only_this = doc.seleccion[i] && doc.selection().len() == 1;
-                    doc.seleccion.fill(false);
-                    doc.seleccion[i] = !only_this;
+        if !obj.visible {
+            label = label.weak();
+        }
+        let forma = match obj.forma {
+            Forma::Contorno { .. } => "zona",
+            Forma::Linea { .. } => "línea",
+            Forma::Texto { .. } => "texto",
+        };
+        let hover = format!(
+            "{}. {forma} · {} · arrastrar para cambiar el orden de bordado · clic derecho: más",
+            i + 1,
+            obj.puntada.nombre()
+        );
+        let (visible, bloqueado) = (obj.visible, obj.bloqueado);
+        let resp = lista::fila(
+            ui,
+            i,
+            doc.seleccion[i],
+            |ui| {
+                if tema::muestra(ui, Color32::from_rgb(r, g, b))
+                    .on_hover_text("Cambiar color")
+                    .clicked()
+                {
+                    pick = Some(i);
                 }
-            }
+                ui.label(tema::icono(icon, false).color(tema::TEXTO_SUAVE));
+                ui.add(egui::Label::new(label).truncate().selectable(false));
+            },
+            |ui| {
+                let (ico, ayuda) = if bloqueado {
+                    (iconos::BLOQUEADO, "Bloqueado: no se elige en el lienzo")
+                } else {
+                    (iconos::DESBLOQUEADO, "Bloquear")
+                };
+                if tema::mini(ui, bloqueado, ico, ayuda).clicked() {
+                    action = Some((i, 3));
+                }
+                let (ico, ayuda) = if visible {
+                    (iconos::VISIBLE, "Ocultar (no se borda)")
+                } else {
+                    (iconos::OCULTO, "Mostrar")
+                };
+                if tema::mini(ui, !visible, ico, ayuda).clicked() {
+                    action = Some((i, 2));
+                }
+            },
+        )
+        .on_hover_text(hover);
+        if resp.clicked() {
+            lista::clic(ui, &mut doc.seleccion, i);
+        }
+        resp.context_menu(|ui| {
             if ui
-                .add(egui::Button::new(iconos::DUPLICAR).small())
-                .on_hover_text("Duplicar")
+                .button(format!("{} Duplicar", iconos::DUPLICAR))
                 .clicked()
             {
-                action = Some((i, 2));
+                action = Some((i, 1));
             }
-            if ui
-                .add(egui::Button::new(iconos::BORRAR).small())
-                .on_hover_text("Borrar")
-                .clicked()
-            {
+            if ui.button(format!("{} Borrar", iconos::BORRAR)).clicked() {
                 action = Some((i, 0));
             }
         });
-        if row.response.dnd_hover_payload::<usize>().is_some()
-            && let Some(pos) = ui.ctx().pointer_interact_pos()
-        {
-            let r = row.response.rect;
-            let gap = if pos.y < r.center().y { i } else { i + 1 };
-            let y = if gap == i { r.top() } else { r.bottom() };
-            ui.painter().hline(
-                ui.max_rect().x_range(),
-                y,
-                egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
-            );
-            drop_gap = Some(gap);
-        }
+        gap = lista::hueco(ui, &resp, i).or(gap);
     }
-    if let Some(gap) = drop_gap
-        && released
-        && let Some(from) = egui::DragAndDrop::take_payload::<usize>(ui.ctx())
-    {
-        doc.move_object(*from, drop_target(*from, gap));
-    }
-    if let Some(i) = toggle_visible {
-        doc.edit(|p| p.objetos[i].visible = !p.objetos[i].visible);
+    if let Some((from, to)) = lista::soltar(ui, gap) {
+        doc.move_object(from, to);
     }
     match action {
         Some((i, 0)) => doc.remove(i),
-        Some((i, _)) => doc.duplicate(i),
+        Some((i, 1)) => doc.duplicate(i),
+        Some((i, 2)) => doc.edit(|p| p.objetos[i].visible = !p.objetos[i].visible),
+        Some((i, _)) => doc.edit(|p| p.objetos[i].bloqueado = !p.objetos[i].bloqueado),
         None => {}
     }
     pick
-}
-
-/// Índice final de un objeto que se saca de `from` y se suelta en el hueco `gap` (antes del
-/// objeto `gap`; `n` = al final).
-fn drop_target(from: usize, gap: usize) -> usize {
-    if gap > from { gap - 1 } else { gap }
 }
 
 /// Nombre, forma y puntada de la selección. Devuelve `Some` si se pidió cambiar la fuente
@@ -729,11 +674,14 @@ fn properties_section(
         ui.weak("Selecciona objetos para elegir su tipo de puntada.");
         return None;
     }
-    ui.strong(if sel.len() == 1 {
-        "Propiedades".to_string()
-    } else {
-        format!("Propiedades ({} objetos)", sel.len())
-    });
+    tema::titulo(
+        ui,
+        &if sel.len() == 1 {
+            "Propiedades".to_string()
+        } else {
+            format!("Propiedades · {} objetos", sel.len())
+        },
+    );
 
     // Tipo de puntada: se aplica a toda la selección (el relleno solo a zonas).
     let first = &doc.proyecto.objetos[sel[0]];
@@ -982,22 +930,4 @@ fn puntada_params(ui: &mut egui::Ui, puntada: &mut Puntada) {
                 ui.end_row();
             }
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn drop_target_accounts_for_removal() {
-        assert_eq!(drop_target(0, 0), 0);
-        assert_eq!(
-            drop_target(0, 1),
-            0,
-            "justo debajo de sí mismo: no se mueve"
-        );
-        assert_eq!(drop_target(0, 3), 2, "antes del objeto 3 = queda en 2");
-        assert_eq!(drop_target(3, 0), 0);
-        assert_eq!(drop_target(1, 4), 3, "al final de 4");
-    }
 }

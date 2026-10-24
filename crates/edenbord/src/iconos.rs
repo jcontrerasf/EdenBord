@@ -21,6 +21,10 @@ pub const INFO: &str = "\u{E2CE}"; // info
 pub const AVISO: &str = "\u{E4E0}"; // warning
 pub const IMAGEN: &str = "\u{E2CA}"; // image
 pub const BLOQUEADO: &str = "\u{E2FA}"; // lock
+pub const DESBLOQUEADO: &str = "\u{E306}"; // lock-open
+pub const VISIBLE: &str = "\u{E220}"; // eye
+pub const OCULTO: &str = "\u{E224}"; // eye-slash
+pub const MENU: &str = "\u{E2F0}"; // list
 
 // Herramientas.
 pub const SELECCIONAR: &str = "\u{E1DC}"; // cursor
@@ -28,6 +32,12 @@ pub const NODOS: &str = "\u{EB00}"; // bezier-curve
 pub const PLUMA: &str = "\u{E3AC}"; // pen-nib
 pub const REGLA: &str = "\u{E6B8}"; // ruler
 pub const CUADRICULA: &str = "\u{E296}"; // grid-four
+pub const AJUSTAR: &str = "\u{E1D0}"; // corners-out
+
+// Vista.
+pub const SALTOS: &str = "\u{E016}"; // arrow-arc-right
+pub const BASTIDOR: &str = "\u{E626}"; // frame-corners
+pub const CONTORNOS: &str = "\u{E69A}"; // selection
 
 // Transformar.
 pub const IZQUIERDA: &str = "\u{E058}"; // arrow-left
@@ -47,9 +57,11 @@ pub const COMBINAR: &str = "\u{E87E}"; // unite
 pub const SEPARAR: &str = "\u{EAE0}"; // scissors
 pub const ESQUINA_CURVA: &str = "\u{E39C}"; // path
 
-// Tipos de objeto.
-pub const ZONA: &str = "\u{E6D0}"; // polygon
-pub const LINEA: &str = "\u{E6D4}"; // line-segments
+// Tipos de puntada.
+pub const GUIA: &str = "\u{E602}"; // circle-dashed
+pub const CORRIDO: &str = "\u{E6D4}"; // line-segments
+pub const SATIN: &str = "\u{EA9C}"; // wave-sawtooth
+pub const RELLENO: &str = "\u{E392}"; // paint-bucket
 
 // Simulación.
 pub const REPRODUCIR: &str = "\u{E3D0}"; // play

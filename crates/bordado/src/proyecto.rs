@@ -63,6 +63,9 @@ pub struct Objeto {
     /// Opacidad (0–1) del relleno con que se ve una guía en el editor; no afecta al bordado.
     #[serde(default = "opacidad_guia", skip_serializing_if = "es_opacidad_guia")]
     pub opacidad: f32,
+    /// Bloqueado: no se elige ni se mueve en el lienzo (sí desde la lista de objetos).
+    #[serde(default, skip_serializing_if = "no")]
+    pub bloqueado: bool,
 }
 
 /// Opacidad con que se ven las guías si no se elige otra: muy traslúcidas.
@@ -461,6 +464,7 @@ mod tests {
             },
             puntada: PRESETS[5].1.clone(),
             opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
         });
         p.objetos.push(Objeto {
             nombre: "texto".into(),
@@ -475,6 +479,7 @@ mod tests {
             },
             puntada: Puntada::Ninguna,
             opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
         });
         let text = p.guardar();
         assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
@@ -500,6 +505,16 @@ mod tests {
         let text = p.guardar();
         assert!(text.contains("\"bloqueado\": true"));
         assert_eq!(Proyecto::leer(&text).unwrap(), p);
+
+        p.fondo.as_mut().unwrap().bloqueado = false;
+        p.objetos[0].bloqueado = true;
+        let text = p.guardar();
+        assert_eq!(
+            text.matches("bloqueado").count(),
+            1,
+            "solo el objeto bloqueado"
+        );
+        assert_eq!(Proyecto::leer(&text).unwrap(), p);
     }
 
     #[test]
@@ -513,6 +528,7 @@ mod tests {
             },
             puntada: PRESETS[1].1.clone(),
             opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert_eq!(pegar_objetos(&text), Some(vec![o]));

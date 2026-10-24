@@ -120,6 +120,7 @@ fn objeto(p: &usvg::Path, n: usize) -> Option<Objeto> {
         forma,
         puntada: Puntada::Ninguna,
         opacidad: OPACIDAD_GUIA,
+        bloqueado: false,
     })
 }
 

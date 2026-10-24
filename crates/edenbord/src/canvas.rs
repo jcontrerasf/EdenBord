@@ -9,7 +9,7 @@ use jef::{Bounds, Jef, StitchKind};
 
 use crate::gestos::{self, Blanco, Gesto, Tipo};
 use crate::nodos::{self, Lado};
-use crate::{Editor, Tool, iconos, tema};
+use crate::{Editor, Tool};
 
 pub(crate) const SELECTION_COLOR: Color32 = Color32::from_rgb(30, 110, 230);
 const PEN_COLOR: Color32 = Color32::from_rgb(220, 0, 140);
@@ -59,60 +59,12 @@ impl Vista {
 
 impl Editor {
     pub(crate) fn canvas(&mut self, ui: &mut egui::Ui) {
-        if self.doc.is_some() || self.proyecto.is_some() {
-            self.toolbar(ui);
-        }
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         painter.rect_filled(response.rect, 0.0, self.fabric);
         if self.doc.is_some() {
             self.canvas_jef(ui, &response, &painter);
         } else if self.proyecto.is_some() {
             self.canvas_proyecto(ui, &response, &painter);
-        }
-    }
-
-    /// Herramientas, cuadrícula y posición del puntero, sobre el lienzo.
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        let before = self.tool;
-        egui::Frame::NONE
-            .fill(ui.visuals().panel_fill)
-            .inner_margin(4.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let mut tools = vec![(Tool::Select, iconos::SELECCIONAR, "Seleccionar (S)")];
-                    if self.proyecto.is_some() {
-                        tools.push((
-                            Tool::Nodes,
-                            iconos::NODOS,
-                            "Nodos (N) · arrastrar nodos y manijas · doble clic en el trazo: \
-                             agregar nodo · Supr: borrar nodo",
-                        ));
-                        tools.push((Tool::Pen, iconos::PLUMA, "Pluma (P) · calcar contornos"));
-                    }
-                    tools.push((
-                        Tool::Ruler,
-                        iconos::REGLA,
-                        "Regla (R) · arrastrar para medir · Shift: múltiplos de 45° · Esc: borrar",
-                    ));
-                    for (tool, ico, ayuda) in tools {
-                        if tema::interruptor(ui, self.tool == tool, ico, ayuda).clicked() {
-                            self.tool = tool;
-                        }
-                    }
-                    ui.separator();
-                    if tema::interruptor(ui, self.show_grid, iconos::CUADRICULA, "Cuadrícula en mm")
-                        .clicked()
-                    {
-                        self.show_grid = !self.show_grid;
-                    }
-                    if let Some(p) = self.pointer_mm {
-                        ui.separator();
-                        ui.monospace(format!("x {:7.1}  y {:7.1} mm", p.x, p.y));
-                    }
-                });
-            });
-        if before == Tool::Ruler && self.tool != Tool::Ruler {
-            self.ruler = None;
         }
     }
 
@@ -172,6 +124,11 @@ impl Editor {
         primary_pans: bool,
     ) -> Vista {
         let rect = response.rect;
+        // Recién ajustada y sin tocar: si el lienzo cambia de tamaño (la ventana se acomoda
+        // al abrir, o se mueve un panel), se vuelve a ajustar.
+        if self.fit_size.is_some_and(|s| s != rect.size()) {
+            self.fit_pending = true;
+        }
         if self.fit_pending {
             let w = fit.width().max(10) as f32;
             let h = fit.height().max(10) as f32;
@@ -182,6 +139,7 @@ impl Editor {
             );
             self.pan = -mid * self.scale;
             self.fit_pending = false;
+            self.fit_size = Some(rect.size());
         }
         use egui::PointerButton::{Middle, Primary, Secondary};
         let space = ui.input(|i| i.key_down(egui::Key::Space));
@@ -192,6 +150,7 @@ impl Editor {
             || (response.dragged_by(Primary) && (space || primary))
         {
             self.pan += response.drag_delta();
+            self.fit_size = None;
         }
 
         // Zoom con la rueda o el gesto, centrado en el puntero.
@@ -204,6 +163,7 @@ impl Editor {
                 let anchor = pointer - rect.center() - self.pan;
                 self.pan -= anchor * (factor - 1.0);
                 self.scale *= factor;
+                self.fit_size = None;
             }
         }
         Vista {
@@ -280,6 +240,7 @@ impl Editor {
             draw_selection_frame(painter, r);
         }
         draw_needle(painter, vista, jef, progress);
+        self.overlays(ui, response, painter, vista);
     }
 
     /// Rectángulo (mm) de la imagen de fondo, si está cargada.
@@ -515,7 +476,16 @@ impl Editor {
         if self.fondo_sel {
             return Some((self.fondo_rect()?, Blanco::Fondo));
         }
-        Some((self.proyecto.as_ref()?.selection_rect()?, Blanco::Objetos))
+        // Con un objeto bloqueado en la selección no hay manijas: no se mueve con el ratón.
+        let doc = self.proyecto.as_ref()?;
+        if doc
+            .selection()
+            .iter()
+            .any(|&i| doc.proyecto.objetos[i].bloqueado)
+        {
+            return None;
+        }
+        Some((doc.selection_rect()?, Blanco::Objetos))
     }
 
     /// Marco de las manijas en pantalla (con el gesto aplicado) y si lleva lados y giro.

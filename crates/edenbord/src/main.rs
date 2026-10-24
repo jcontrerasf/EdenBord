@@ -5,10 +5,12 @@
 // Sin ventana de consola en Windows (en depuración se deja, para ver los mensajes).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod barras;
 mod canvas;
 mod doc;
 mod gestos;
 mod iconos;
+mod lista;
 mod nodos;
 mod panel_proyecto;
 mod pluma;
@@ -49,7 +51,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             tema::instalar(&cc.egui_ctx);
-            let mut app = Editor::default();
+            let mut app = Editor {
+                logo: load_logo(&cc.egui_ctx),
+                ..Default::default()
+            };
             if let Some(path) = initial {
                 app.open(Some(&path));
             }
@@ -111,12 +116,16 @@ struct Editor {
     /// Imagen de fondo cargada: ruta y textura (`None` si no se pudo leer, para no reintentar).
     fondo_tex: Option<(PathBuf, Option<egui::TextureHandle>)>,
     title: String,
+    /// Icono de la aplicación, para la barra y la bienvenida.
+    logo: Option<egui::TextureHandle>,
 
     // Vista.
     /// Escala en píxeles por 0,1 mm y desplazamiento del origen respecto al centro del lienzo.
     scale: f32,
     pan: Vec2,
     fit_pending: bool,
+    /// Tamaño del lienzo en el último ajuste, mientras no se haya movido la vista desde entonces.
+    fit_size: Option<Vec2>,
     show_jumps: bool,
     show_hoop: bool,
     show_grid: bool,
@@ -164,9 +173,11 @@ impl Default for Editor {
             pointer_mm: None,
             fondo_tex: None,
             title: String::new(),
+            logo: None,
             scale: 1.0,
             pan: Vec2::ZERO,
             fit_pending: true,
+            fit_size: None,
             show_jumps: false,
             show_hoop: true,
             show_grid: true,
@@ -189,6 +200,13 @@ impl Default for Editor {
             play_accum: 0.0,
         }
     }
+}
+
+fn load_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let rgba = image::load_from_memory(ICON).ok()?.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let img = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    Some(ctx.load_texture("logo", img, egui::TextureOptions::LINEAR))
 }
 
 fn file_name(path: &Path) -> String {
@@ -423,10 +441,7 @@ impl Editor {
             && self.gesto.is_none()
             && self.gesto_nodo.is_none()
         {
-            if self.tool == Tool::Ruler && t != Tool::Ruler {
-                self.ruler = None;
-            }
-            self.tool = t;
+            self.set_tool(t);
         }
         // Mientras se dibuja con la pluma, deshacer quita el último vértice (no toca el proyecto).
         let pen_drawing = self.tool == Tool::Pen && !self.pen.nodos.is_empty();
@@ -580,165 +595,67 @@ impl Editor {
         }
     }
 
+    /// Panel derecho: lista (colores u objetos) arriba y propiedades abajo.
     fn side_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(format!("{} Abrir…", iconos::ABRIR)).clicked()
-                && let Some(path) = open_dialog().pick_file()
-            {
-                self.request_open(Some(path));
-            }
-            if ui
-                .button(format!("{} Proyecto nuevo", iconos::NUEVO))
-                .clicked()
-            {
-                self.request_open(None);
-            }
-            if tema::boton_icono(ui, iconos::INFO, &format!("Acerca de {APP}")).clicked() {
-                self.about = true;
-            }
-        });
         if self.proyecto.is_some() {
-            self.show_message(ui);
-            ui.separator();
             self.proyecto_panel(ui);
             return;
         }
-        ui.horizontal_wrapped(|ui| {
-            let has_doc = self.doc.is_some();
-            if ui
-                .add_enabled_ui(has_doc, |ui| {
-                    tema::boton_principal(ui, iconos::GUARDAR, "Guardar como…")
-                })
-                .inner
-                .on_hover_text("Ctrl+S")
-                .clicked()
-            {
-                self.save_as();
-            }
-            if ui
-                .add_enabled(
-                    has_doc,
-                    egui::Button::new(format!("{} Agregar diseño…", iconos::AGREGAR)),
-                )
-                .clicked()
-            {
-                self.add_design();
-            }
-        });
-        self.show_message(ui);
-        ui.separator();
-
         let Some(doc) = &mut self.doc else {
-            ui.label(
-                "Abre un .jef, un proyecto .edenbord o un dibujo .svg, o arrástralo a la ventana.",
-            );
             return;
         };
-
-        ui.horizontal(|ui| {
-            if tema::boton_icono_si(ui, doc.can_undo(), iconos::DESHACER, "Deshacer (Ctrl+Z)")
-                .clicked()
-            {
-                doc.undo();
-            }
-            if tema::boton_icono_si(ui, doc.can_redo(), iconos::REHACER, "Rehacer (Ctrl+Y)")
-                .clicked()
-            {
-                doc.redo();
-            }
-        });
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let doc = self.doc.as_mut().unwrap();
-            Self::info_section(ui, doc);
-            ui.separator();
-            Self::hoop_section(ui, doc);
-            ui.separator();
-            self.picking_color = Self::color_section(ui, doc).or(self.picking_color);
-            ui.separator();
-            let sel = doc.selection();
-            let label = if sel.is_empty() {
-                "Transformar (todo el diseño)"
-            } else {
-                "Transformar (selección)"
-            };
-            if let Some(op) = self.transform_section(ui, label, true) {
-                apply_jef(self.doc.as_mut().unwrap(), op);
-            }
-            ui.separator();
-            self.view_sections(ui);
-        });
-    }
-
-    fn show_message(&self, ui: &mut egui::Ui) {
-        if let Some((text, is_error)) = &self.message {
-            let color = if *is_error {
-                tema::COPIHUE
-            } else {
-                ui.visuals().text_color()
-            };
-            ui.colored_label(color, text);
-        }
-    }
-
-    /// Secciones "Vista" y "Simulación", comunes a JEF y proyectos.
-    fn view_sections(&mut self, ui: &mut egui::Ui) {
-        let total = self.current_jef().map_or(0, |j| j.stitches.len());
-        ui.collapsing("Vista", |ui| {
-            ui.checkbox(&mut self.show_jumps, "Mostrar saltos");
-            ui.checkbox(&mut self.show_hoop, "Mostrar bastidor");
-            ui.checkbox(&mut self.show_grid, "Cuadrícula en mm");
-            if self.proyecto.is_some() {
-                ui.checkbox(&mut self.show_outlines, "Mostrar contornos");
-            }
-            ui.horizontal(|ui| {
-                ui.label("Tela");
-                ui.color_edit_button_srgba(&mut self.fabric);
+        let n = doc.blocks.len();
+        egui::Panel::top("lista_colores")
+            .resizable(true)
+            .default_size(260.0)
+            .min_size(80.0)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(0, 6)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    tema::titulo(ui, &format!("Colores · {n}"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("ninguno").clicked() {
+                            doc.selected.fill(false);
+                        }
+                        if ui.small_button("todos").clicked() {
+                            doc.selected.fill(true);
+                        }
+                    });
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("colores")
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        if let Some(i) = Self::color_section(ui, doc) {
+                            self.picking_color = Some(i);
+                        }
+                    });
             });
-            if ui.button("Ajustar a la ventana").clicked() {
-                self.fit_pending = true;
-            }
-        });
-        ui.collapsing("Simulación", |ui| {
-            // `usize::MAX` = mostrar todo, aunque el diseño crezca al editarlo.
-            let mut shown = self.progress.min(total);
-            ui.horizontal(|ui| {
-                let label = if self.playing {
-                    format!("{} Pausa", iconos::PAUSA)
+
+        egui::ScrollArea::vertical()
+            .id_salt("propiedades")
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.add_space(6.0);
+                let doc = self.doc.as_ref().unwrap();
+                let label = if doc.selection().is_empty() {
+                    "Transformar todo"
                 } else {
-                    format!("{} Reproducir", iconos::REPRODUCIR)
+                    "Transformar selección"
                 };
-                if ui.button(label).clicked() {
-                    if !self.playing && shown >= total {
-                        shown = 0;
-                    }
-                    self.playing = !self.playing;
+                if let Some(op) = self.transform_section(ui, label, true) {
+                    apply_jef(self.doc.as_mut().unwrap(), op);
                 }
-                if ui.button(iconos::AL_INICIO).clicked() {
-                    shown = 0;
-                }
-                if ui.button(iconos::AL_FIN).clicked() {
-                    shown = total;
-                    self.playing = false;
-                }
+                ui.separator();
+                tema::titulo(ui, "Diseño");
+                let doc = self.doc.as_mut().unwrap();
+                Self::info_section(ui, doc);
+                Self::hoop_section(ui, doc);
             });
-            ui.add(egui::Slider::new(&mut shown, 0..=total).text("puntada"));
-            self.progress = if shown >= total { usize::MAX } else { shown };
-            ui.add(
-                egui::Slider::new(&mut self.speed, 0.25..=20.0)
-                    .logarithmic(true)
-                    .text("velocidad"),
-            );
-        });
     }
 
     fn info_section(ui: &mut egui::Ui, doc: &Doc) {
         let jef = &doc.jef;
-        let mut name = file_name(&doc.path);
-        if doc.dirty {
-            name.push_str(" •");
-        }
-        ui.heading(name);
         let (w, h) = jef.size_mm();
         egui::Grid::new("info").num_columns(2).show(ui, |ui| {
             ui.label("Tamaño");
@@ -749,9 +666,6 @@ impl Editor {
             ui.end_row();
             ui.label("Saltos");
             ui.label(jef.count(StitchKind::Jump).to_string());
-            ui.end_row();
-            ui.label("Colores");
-            ui.label(jef.colors.len().to_string());
             ui.end_row();
         });
         let (_, long) = jef.odd_stitches(0, LONG_STITCH);
@@ -802,72 +716,91 @@ impl Editor {
         }
     }
 
-    /// Lista de bloques de color. Devuelve el bloque cuyo color se quiere cambiar, si alguno.
+    /// Lista de bloques de color (arrastrar = cambiar el orden de bordado). Devuelve el
+    /// bloque cuyo color se quiere cambiar, si alguno.
     fn color_section(ui: &mut egui::Ui, doc: &mut Doc) -> Option<usize> {
-        ui.horizontal(|ui| {
-            ui.strong("Colores");
-            if ui.small_button("todos").clicked() {
-                doc.selected.fill(true);
-            }
-            if ui.small_button("ninguno").clicked() {
-                doc.selected.fill(false);
-            }
-        });
-        ui.small("Clic: seleccionar · Ctrl+clic: agregar · nada seleccionado = todo");
-
         let mut pick = None;
+        // (bloque, acción): 0 borrar, 1 ver/ocultar, -1/2 subir/bajar.
         let mut action: Option<(usize, i8)> = None;
+        let mut gap = None;
         let n = doc.blocks.len();
         for i in 0..n {
             let idx = doc.jef.colors.get(i).copied().unwrap_or(0);
             let name = palette::thread(idx).map_or("?", |t| t.name);
             let [r, g, b] = doc.jef.thread_rgb(i);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut doc.visible[i], "")
-                    .on_hover_text("Mostrar/ocultar");
-                let swatch = egui::Button::new("")
-                    .fill(Color32::from_rgb(r, g, b))
-                    .min_size(Vec2::new(20.0, 18.0));
-                if ui.add(swatch).on_hover_text("Cambiar color").clicked() {
-                    pick = Some(i);
-                }
-                let label = format!("{}. {name} ({idx})", i + 1);
-                let response = ui
-                    .selectable_label(doc.selected[i], label)
-                    .on_hover_text(format!("{} entradas", doc.blocks[i].len()));
-                if response.clicked() {
-                    if ui.input(|inp| inp.modifiers.command) {
-                        doc.selected[i] = !doc.selected[i];
-                    } else {
-                        let only_this = doc.selected[i] && doc.selection().len() == 1;
-                        doc.selected.fill(false);
-                        doc.selected[i] = !only_this;
+            let visible = doc.visible[i];
+            let resp = lista::fila(
+                ui,
+                i,
+                doc.selected[i],
+                |ui| {
+                    if tema::muestra(ui, Color32::from_rgb(r, g, b))
+                        .on_hover_text("Cambiar color")
+                        .clicked()
+                    {
+                        pick = Some(i);
                     }
-                }
+                    let mut text = egui::RichText::new(format!("{}. {name}", i + 1));
+                    if !visible {
+                        text = text.weak();
+                    }
+                    ui.add(egui::Label::new(text).truncate().selectable(false));
+                    ui.weak(format!("n.º {idx}"));
+                },
+                |ui| {
+                    let (ico, ayuda) = if visible {
+                        (iconos::VISIBLE, "Ocultar")
+                    } else {
+                        (iconos::OCULTO, "Mostrar")
+                    };
+                    if tema::mini(ui, !visible, ico, ayuda).clicked() {
+                        action = Some((i, 1));
+                    }
+                },
+            )
+            .on_hover_text(format!(
+                "{} entradas · arrastrar para cambiar el orden de bordado · clic derecho: más",
+                doc.blocks[i].len()
+            ));
+            if resp.clicked() {
+                lista::clic(ui, &mut doc.selected, i);
+            }
+            resp.context_menu(|ui| {
                 if ui
-                    .add_enabled(i > 0, egui::Button::new(iconos::SUBIR).small())
+                    .add_enabled(i > 0, egui::Button::new(format!("{} Subir", iconos::SUBIR)))
                     .clicked()
                 {
                     action = Some((i, -1));
                 }
                 if ui
-                    .add_enabled(i + 1 < n, egui::Button::new(iconos::BAJAR).small())
+                    .add_enabled(
+                        i + 1 < n,
+                        egui::Button::new(format!("{} Bajar", iconos::BAJAR)),
+                    )
                     .clicked()
                 {
-                    action = Some((i, 1));
+                    action = Some((i, 2));
                 }
                 if ui
-                    .add_enabled(n > 1, egui::Button::new(iconos::BORRAR).small())
-                    .on_hover_text("Borrar bloque")
+                    .add_enabled(
+                        n > 1,
+                        egui::Button::new(format!("{} Borrar bloque", iconos::BORRAR)),
+                    )
                     .clicked()
                 {
                     action = Some((i, 0));
                 }
             });
+            gap = lista::hueco(ui, &resp, i).or(gap);
+        }
+        if let Some((from, to)) = lista::soltar(ui, gap) {
+            doc.move_block(from, to);
         }
         match action {
             Some((i, 0)) => doc.remove_block(i),
-            Some((i, d)) => doc.move_block(i, (i as isize + d as isize) as usize),
+            Some((i, 1)) => doc.visible[i] = !doc.visible[i],
+            Some((i, -1)) => doc.move_block(i, i - 1),
+            Some((i, _)) => doc.move_block(i, i + 1),
             None => {}
         }
         pick
@@ -1106,13 +1039,44 @@ impl Editor {
             });
     }
 
-    fn update_title(&mut self, ctx: &egui::Context) {
-        let name = match (&self.doc, &self.proyecto) {
+    /// Nombre del documento abierto, si hay uno.
+    fn doc_name(&self) -> Option<String> {
+        match (&self.doc, &self.proyecto) {
             (Some(doc), _) => Some(file_name(&doc.path)),
             (_, Some(doc)) => Some(doc.path.as_deref().map_or(doc.nombre.clone(), file_name)),
             _ => None,
-        };
-        let title = match name {
+        }
+    }
+
+    /// Si se puede deshacer y rehacer en el documento abierto.
+    fn can_undo_redo(&self) -> (bool, bool) {
+        match (&self.doc, &self.proyecto) {
+            (Some(d), _) => (d.can_undo(), d.can_redo()),
+            (_, Some(d)) => (d.can_undo(), d.can_redo()),
+            _ => (false, false),
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(d) = &mut self.doc {
+            d.undo();
+        }
+        if let Some(d) = &mut self.proyecto {
+            d.undo();
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(d) = &mut self.doc {
+            d.redo();
+        }
+        if let Some(d) = &mut self.proyecto {
+            d.redo();
+        }
+    }
+
+    fn update_title(&mut self, ctx: &egui::Context) {
+        let title = match self.doc_name() {
             Some(name) => format!("{}{name} — EdenBord", if self.dirty() { "• " } else { "" },),
             None => "EdenBord".into(),
         };
@@ -1159,13 +1123,39 @@ impl eframe::App for Editor {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        egui::Panel::left("panel")
-            .resizable(true)
-            .default_size(320.0)
-            .show(ui, |ui| self.side_panel(ui));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(tema::LINO))
-            .show(ui, |ui| self.canvas(ui));
+        let barra = egui::Frame::NONE
+            .fill(tema::LINO)
+            .inner_margin(egui::Margin::symmetric(10, 6));
+        egui::Panel::top("barra")
+            .frame(barra)
+            .show(ui, |ui| self.top_bar(ui));
+        if self.doc.is_some() || self.proyecto.is_some() {
+            egui::Panel::bottom("estado")
+                .frame(barra)
+                .show(ui, |ui| self.status_bar(ui));
+            egui::Panel::left("herramientas")
+                .resizable(false)
+                .exact_size(46.0)
+                .frame(egui::Frame::NONE.fill(tema::LINO).inner_margin(6))
+                .show(ui, |ui| self.tools_bar(ui));
+            egui::Panel::right("panel")
+                .resizable(true)
+                .default_size(300.0)
+                .min_size(240.0)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(tema::LINO)
+                        .inner_margin(egui::Margin::symmetric(10, 0)),
+                )
+                .show(ui, |ui| self.side_panel(ui));
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(tema::LINO))
+                .show(ui, |ui| self.canvas(ui));
+        } else {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(tema::LINO))
+                .show(ui, |ui| self.welcome(ui));
+        }
         self.color_picker(&ctx);
         self.confirm_dialog(&ctx);
         self.about_dialog(&ctx);

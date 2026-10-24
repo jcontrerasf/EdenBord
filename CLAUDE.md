@@ -93,8 +93,9 @@ bastidor. El orden de `objetos` es el orden de bordado. Los proyectos antiguos (
 `.bordado`, `"formato":"bordado"` = `FORMATO_ANTIGUO`) se siguen leyendo; Ctrl+S sobre uno de
 ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto literal.
 
-- `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad }`. `opacidad` solo
-  sirve para ver las guías en el editor (se omite en el JSON si es `OPACIDAD_GUIA` = 0,15).
+- `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad, bloqueado }`.
+  `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
+  `OPACIDAD_GUIA` = 0,15). `bloqueado` (solo se escribe si es `true`): no se elige en el lienzo.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
   `texto {texto, fuente (ruta), alto (mayúsculas, mm), espaciado, afin [6]}`. `d` es el `d` de
   SVG (kurbo `BezPath`), guardado con 3 decimales. Transformar un texto compone su `afin`.
@@ -127,7 +128,16 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 
 ## App (`crates/edenbord/src`)
 
-- `main.rs`: estado `Editor`, panel lateral, atajos, diálogos (paleta, confirmaciones), guardado.
+- `main.rs`: estado `Editor`, distribución (`App::ui`), panel derecho de JEF (`side_panel`),
+  atajos, diálogos (paleta, confirmaciones), guardado.
+- Distribución (`barras.rs`): barra superior (logo, nombre, abrir/nuevo/guardar, deshacer,
+  importar; a la derecha la acción principal verde y el menú ☰), columna de herramientas a la
+  izquierda (`tools_bar`, `set_tool`), panel derecho (lista arriba en un `Panel::top`
+  redimensionable, propiedades abajo) y barra de estado (simulación, vista, mensaje,
+  coordenadas). Sin documento: `welcome`. Las barras reservan primero lo de la derecha
+  (`right_to_left`) y recortan lo que no cabe. No hay barra de menús (decisión del usuario).
+- `lista.rs`: filas de las listas (colores JEF y objetos): `fila` (clic elige, arrastrar
+  reordena con `DragAndDrop`; botones de la derecha con prioridad), `clic`, `hueco`, `soltar`.
 - `doc.rs`: `Doc` = diseño + visibilidad/selección por bloque + historial (100 copias del `Jef`).
   Ediciones con `doc.edit(|j| …)`; el arrastre con Shift usa `checkpoint()` una vez y luego
   `translate` directo.
@@ -135,7 +145,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   central/derecho o Espacio + arrastrar (en JEF también el arrastre principal; ahí la selección
   se mueve con Shift + arrastrar). En proyectos (`select_input`, prioridad en `pick`): manijas →
   objeto (clic elige, arrastrar mueve; Ctrl/Shift agrega; `object_at`: primero bordes, si no la zona
-  más chica que contiene el punto; los ocultos no se eligen) → interior del marco → fondo libre →
+  más chica que contiene el punto; ocultos y bloqueados no se eligen, `elegible`) → interior del
+  marco (sin manijas si la selección tiene un bloqueado) → fondo libre →
   vacío = rectángulo de selección (`objects_in`, formas enteras dentro).
 - `gestos.rs`: `Editor.gesto` (`Transformar {blanco: Objetos|Fondo, tipo: Mover|Escalar(sx,sy)|
   Girar, r0, desde, af}` o `Caja`). Durante el gesto solo se acumula `af` y se dibuja la vista
@@ -171,20 +182,21 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - Guías que son zonas: se ven rellenas (color de hilo × `opacidad`, par-impar) con una malla de
   trapecios (`proyecto::trapecios`, en caché en `ProyectoDoc.relleno_guias`, recalculada en
   `sync()`).
-- Lista de objetos: arrastrar el nombre cambia el orden de bordado (`DragAndDrop` de egui con
-  el índice; `drop_target` corrige el hueco tras sacar el objeto).
+- Lista de objetos y de colores JEF: arrastrar una fila cambia el orden de bordado
+  (`lista.rs`); clic derecho = menú (duplicar/borrar, subir/bajar). Ojo y candado en la fila.
 - Con varios objetos seleccionados, el panel edita los parámetros del primero y los aplica con
   `copiar_cambios` a los del mismo tipo; el selector de color pinta toda la selección si el
   objeto elegido es parte de ella.
-- Barra sobre el lienzo (`canvas.rs::toolbar`): herramienta (`Tool::Select/Nodes/Pen/Ruler`),
-  cuadrícula y posición del puntero en mm. `tool_drags()`: con nodos, pluma o regla el arrastre
-  principal es de la herramienta, no mueve vista ni selección.
+- `tool_drags()`: con nodos, pluma o regla el arrastre principal es de la herramienta, no
+  mueve vista ni selección. `overlays` (regla y puntero) lo llaman ambos lienzos.
+- Ajuste de la vista: tras ajustar, mientras no se mueva la vista (`fit_size`), si el lienzo
+  cambia de tamaño se vuelve a ajustar (la ventana se acomoda después del primer cuadro).
 - Cuadrícula (`draw_grid`): alineada al origen, paso adaptativo 1/5/10/50/100 mm (≥ 8 px),
   líneas fuertes cada 10 mm (o 5 pasos), ejes más oscuros. Regla: `Editor.ruler` (mm),
   Shift = múltiplos de 45° (`snap45`), Esc borra; sirve en JEF y proyectos.
 - Fondo: textura en `Editor.fondo_tex` (crate `image`), recargada en `logic` si cambia la ruta.
 - `panel_proyecto.rs`: guardar `.edenbord` (relee y compara), exportar JEF (`write_verified`),
-  importar SVG, agregar texto, lista de objetos, propiedades/puntada. Transformar usa el mismo
+  importar SVG, agregar texto, panel derecho del proyecto (objetos, propiedades/puntada, fondo). Transformar usa el mismo
   `Op` que los JEF (`apply_jef` / `apply_proyecto`); en proyectos escalar re-densifica solo.
 - Guardar es solo "Guardar como…" (sugiere `<nombre>_editado.jef`), relee para verificar y pide
   confirmación antes de sobrescribir el archivo abierto.
@@ -234,4 +246,3 @@ Ideas pendientes:
 - Exportar a DST/EXP (simples) y PES (complejo).
 - Soporte `.JBF`.
 - Re-densificar al escalar (requiere reconocer rellenos/satines; difícil).
-- Mover un bloque a mano sigue sin poder separarse de su orden de bordado (solo ⏶/⏷ en JEF).

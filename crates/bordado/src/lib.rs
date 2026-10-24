@@ -202,6 +202,7 @@ mod tests {
             },
             puntada,
             opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
         }
     }
 
@@ -251,6 +252,7 @@ mod tests {
             },
             puntada: PRESETS[5].1.clone(),
             opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
         });
         let g = p.generar();
         assert_eq!(g.avisos.len(), 1);

@@ -212,3 +212,34 @@ pub fn boton_principal(ui: &mut Ui, ico: &str, texto: &str) -> Response {
     .min_size(Vec2::new(0.0, 30.0));
     ui.add(r)
 }
+
+/// Botón chico de ícono para las filas de las listas: marcado si `activo`, suave si no.
+pub fn mini(ui: &mut Ui, activo: bool, ico: &str, ayuda: &str) -> Response {
+    let color = if activo {
+        TEXTO
+    } else {
+        TEXTO_SUAVE.gamma_multiply(0.7)
+    };
+    let texto = RichText::new(ico).size(15.0).color(color);
+    ui.add(egui::Button::new(texto).frame_when_inactive(false).small())
+        .on_hover_text(ayuda)
+}
+
+/// Muestra redonda de un color de hilo; se puede apretar.
+pub fn muestra(ui: &mut Ui, color: Color32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::click());
+    let borde = if resp.hovered() { TEXTO } else { BORDE };
+    ui.painter()
+        .circle(rect.center(), 8.0, color, Stroke::new(1.5, borde));
+    resp
+}
+
+/// Título de sección del panel: chico, en mayúsculas y suave.
+pub fn titulo(ui: &mut Ui, texto: &str) {
+    ui.label(
+        RichText::new(texto.to_uppercase())
+            .size(11.0)
+            .family(FontFamily::Name(FUERTE.into()))
+            .color(TEXTO_SUAVE),
+    );
+}

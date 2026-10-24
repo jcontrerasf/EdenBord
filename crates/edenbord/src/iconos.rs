@@ -25,6 +25,12 @@ pub const DESBLOQUEADO: &str = "\u{E306}"; // lock-open
 pub const VISIBLE: &str = "\u{E220}"; // eye
 pub const OCULTO: &str = "\u{E224}"; // eye-slash
 pub const MENU: &str = "\u{E2F0}"; // list
+pub const RECIENTES: &str = "\u{E1A0}"; // clock-counter-clockwise
+pub const ARCHIVO: &str = "\u{E230}"; // file
+pub const ARCHIVO_JEF: &str = "\u{E82E}"; // needle
+pub const FLOR: &str = "\u{EACC}"; // flower-tulip
+pub const ACERCAR: &str = "\u{E310}"; // magnifying-glass-plus
+pub const ALEJAR: &str = "\u{E30E}"; // magnifying-glass-minus
 
 // Herramientas.
 pub const SELECCIONAR: &str = "\u{E1DC}"; // cursor

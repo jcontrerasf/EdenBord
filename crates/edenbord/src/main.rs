@@ -15,6 +15,7 @@ mod lista;
 mod nodos;
 mod panel_proyecto;
 mod pluma;
+mod preferencias;
 mod proyecto;
 mod tema;
 
@@ -56,6 +57,12 @@ fn main() -> eframe::Result {
                 logo: load_logo(&cc.egui_ctx),
                 ..Default::default()
             };
+            if let Some(prefs) = cc
+                .storage
+                .and_then(|s| eframe::get_value(s, preferencias::CLAVE))
+            {
+                app.apply_prefs(&cc.egui_ctx, prefs);
+            }
             if let Some(path) = initial {
                 app.open(Some(&path));
             }
@@ -117,6 +124,8 @@ struct Editor {
     /// Imagen de fondo cargada: ruta y textura (`None` si no se pudo leer, para no reintentar).
     fondo_tex: Option<(PathBuf, Option<egui::TextureHandle>)>,
     title: String,
+    /// Archivos abiertos o guardados hace poco (ver `preferencias`).
+    recientes: Vec<PathBuf>,
     /// Icono de la aplicación, para la barra y la bienvenida.
     logo: Option<egui::TextureHandle>,
 
@@ -150,6 +159,8 @@ struct Editor {
     step_mm: f32,
     angle: f64,
     scale_pct: f64,
+    /// Zoom de la interfaz, para guardarlo en las preferencias.
+    zoom_ui: f32,
     /// Ancho y alto proporcionales en la barra contextual.
     lock_ratio: bool,
 
@@ -177,6 +188,7 @@ impl Default for Editor {
             fondo_tex: None,
             title: String::new(),
             logo: None,
+            recientes: vec![],
             scale: 1.0,
             pan: Vec2::ZERO,
             fit_pending: true,
@@ -198,6 +210,7 @@ impl Default for Editor {
             angle: 15.0,
             scale_pct: 100.0,
             lock_ratio: true,
+            zoom_ui: 1.0,
             progress: usize::MAX,
             playing: false,
             speed: 1.0,
@@ -320,8 +333,9 @@ impl Editor {
                 })
                 .map_err(|e| e.to_string()),
         };
-        if let Err(e) = result {
-            self.error(format!("No se pudo abrir {}: {e}", path.display()));
+        match result {
+            Ok(()) => preferencias::agregar_reciente(&mut self.recientes, path),
+            Err(e) => self.error(format!("No se pudo abrir {}: {e}", path.display())),
         }
     }
 
@@ -402,6 +416,7 @@ impl Editor {
                 doc.path = path.clone();
                 doc.dirty = false;
                 self.info(format!("Guardado y verificado: {}", file_name(&path)));
+                preferencias::agregar_reciente(&mut self.recientes, &path);
             }
             Err(e) => self.error(format!("Error al guardar {}: {e}", path.display())),
         }
@@ -944,6 +959,29 @@ impl Editor {
             });
     }
 
+    fn apply_prefs(&mut self, ctx: &egui::Context, p: preferencias::Preferencias) {
+        self.recientes = p.recientes;
+        self.show_jumps = p.saltos;
+        self.show_hoop = p.bastidor;
+        self.show_grid = p.cuadricula;
+        self.show_outlines = p.contornos;
+        let [r, g, b] = p.tela;
+        self.fabric = Color32::from_rgb(r, g, b);
+        ctx.set_zoom_factor(p.zoom_ui.clamp(0.5, 3.0));
+    }
+
+    fn prefs(&self, zoom_ui: f32) -> preferencias::Preferencias {
+        preferencias::Preferencias {
+            recientes: self.recientes.clone(),
+            zoom_ui,
+            saltos: self.show_jumps,
+            bastidor: self.show_hoop,
+            cuadricula: self.show_grid,
+            contornos: self.show_outlines,
+            tela: [self.fabric.r(), self.fabric.g(), self.fabric.b()],
+        }
+    }
+
     /// Nombre del documento abierto, si hay uno.
     fn doc_name(&self) -> Option<String> {
         match (&self.doc, &self.proyecto) {
@@ -1029,8 +1067,14 @@ impl eframe::App for Editor {
         self.load_fondo(ctx);
     }
 
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, preferencias::CLAVE, &self.prefs(self.zoom_ui));
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Ctrl + / Ctrl − / Ctrl 0 los maneja egui; se recuerda el valor para guardarlo.
+        self.zoom_ui = ctx.zoom_factor();
         let barra = egui::Frame::NONE
             .fill(tema::LINO)
             .inner_margin(egui::Margin::symmetric(10, 6));

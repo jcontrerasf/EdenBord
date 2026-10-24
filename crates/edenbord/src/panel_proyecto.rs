@@ -244,6 +244,7 @@ impl Editor {
                 doc.path = Some(path.clone());
                 doc.dirty = false;
                 self.info(format!("Proyecto guardado: {}", file_name(&path)));
+                crate::preferencias::agregar_reciente(&mut self.recientes, &path);
             }
             Err(e) => self.error(format!("Error al guardar {}: {e}", path.display())),
         }

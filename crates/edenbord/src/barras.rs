@@ -1,6 +1,8 @@
 //! Barras que rodean el lienzo: superior (archivo y edición), herramientas (columna
 //! izquierda), estado (simulación, vista y mensajes) y la pantalla sin documento.
 
+use std::path::PathBuf;
+
 use eframe::egui::{self, Align, Layout, RichText, Ui, Vec2};
 
 use crate::{APP, Editor, Tool, iconos, open_dialog, tema};
@@ -15,6 +17,33 @@ impl Editor {
                 if proyecto && ui.button("Guardar como…").clicked() {
                     self.save_project(true);
                 }
+                ui.menu_button(format!("{} Recientes", iconos::RECIENTES), |ui| {
+                    if self.recientes.is_empty() {
+                        ui.weak("Nada todavía");
+                    }
+                    if let Some(path) = self.recent_list(ui, 0.0) {
+                        self.request_open(Some(path));
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let zoom = ui.ctx().zoom_factor();
+                    ui.label("Interfaz");
+                    if tema::boton_icono(ui, iconos::ALEJAR, "Achicar (Ctrl −)").clicked() {
+                        ui.ctx().set_zoom_factor((zoom - 0.1).max(0.5));
+                    }
+                    if ui
+                        .button(format!("{:.0} %", zoom * 100.0))
+                        .on_hover_text("Tamaño normal (Ctrl 0)")
+                        .clicked()
+                    {
+                        ui.ctx().set_zoom_factor(1.0);
+                    }
+                    if tema::boton_icono(ui, iconos::ACERCAR, "Agrandar (Ctrl +)").clicked() {
+                        ui.ctx().set_zoom_factor((zoom + 0.1).min(3.0));
+                    }
+                });
+                ui.separator();
                 if ui
                     .button(format!("{} Acerca de {APP}", iconos::INFO))
                     .clicked()
@@ -238,7 +267,8 @@ impl Editor {
     /// Sin nada abierto: logo y botones para empezar.
     pub(crate) fn welcome(&mut self, ui: &mut Ui) {
         ui.vertical_centered(|ui| {
-            ui.add_space((ui.available_height() / 2.0 - 190.0).max(20.0));
+            let alto = 380.0 + 34.0 * self.recientes.len() as f32;
+            ui.add_space(((ui.available_height() - alto) / 2.0).max(20.0));
             if let Some(logo) = &self.logo {
                 ui.add(egui::Image::new(logo).fit_to_exact_size(Vec2::splat(128.0)));
             }
@@ -254,7 +284,7 @@ impl Editor {
                     .color(tema::TEXTO_SUAVE),
             );
             ui.add_space(24.0);
-            let ancho = 260.0;
+            let ancho = 300.0;
             let grande = |ui: &mut Ui, ico: &str, texto: &str| {
                 ui.add(
                     egui::Button::new(RichText::new(format!("{ico}   {texto}")).size(15.0))
@@ -276,9 +306,48 @@ impl Editor {
                 )
                 .color(tema::TEXTO_SUAVE),
             );
+            if !self.recientes.is_empty() {
+                ui.add_space(20.0);
+                tema::titulo(ui, "Recientes");
+                if let Some(path) = self.recent_list(ui, 300.0) {
+                    self.request_open(Some(path));
+                }
+            }
             if let Some((text, true)) = &self.message {
                 ui.colored_label(tema::COPIHUE, text);
             }
         });
+    }
+
+    /// Botones de los archivos recientes (los que ya no existen, deshabilitados). Devuelve el
+    /// elegido. `ancho` 0 = el natural.
+    fn recent_list(&self, ui: &mut Ui, ancho: f32) -> Option<PathBuf> {
+        let mut elegido = None;
+        for path in &self.recientes {
+            let ico = match crate::extension(path).as_str() {
+                "jef" => iconos::ARCHIVO_JEF,
+                "svg" => iconos::SVG,
+                "edenbord" | "bordado" => iconos::FLOR,
+                _ => iconos::ARCHIVO,
+            };
+            let carpeta = path
+                .parent()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default();
+            let existe = path.exists();
+            let boton = egui::Button::new(format!("{ico}  {}", crate::file_name(path)))
+                .min_size(Vec2::new(ancho, 30.0));
+            let resp = ui.add_enabled(existe, boton);
+            let resp = if existe {
+                resp.on_hover_text(carpeta)
+            } else {
+                resp.on_disabled_hover_text(format!("Ya no existe: {}", path.display()))
+            };
+            if resp.clicked() {
+                elegido = Some(path.clone());
+                ui.close();
+            }
+        }
+        elegido
     }
 }

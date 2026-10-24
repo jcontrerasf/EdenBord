@@ -136,6 +136,11 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   redimensionable, propiedades abajo) y barra de estado (simulación, vista, mensaje,
   coordenadas). Sin documento: `welcome`. Las barras reservan primero lo de la derecha
   (`right_to_left`) y recortan lo que no cabe. No hay barra de menús (decisión del usuario).
+- `preferencias.rs`: lo que se recuerda entre sesiones (feature `persistence` de eframe, clave
+  `preferencias` en `~/.local/share/edenbord/app.ron`): recientes (máx. 10, sin repetir; se
+  agregan al abrir y al guardar), zoom de la interfaz (Ctrl +/−/0 los maneja egui; también en
+  el menú ☰), interruptores de vista y color de tela. eframe además recuerda ventana y paneles.
+  Bienvenida y menú ☰ muestran los recientes (`recent_list`; los que no existen, deshabilitados).
 - `contexto.rs`: barra contextual bajo la superior, según `Tool`: Seleccionar = X/Y/ancho/alto
   editables (proyecto: `transform_grouped`, candado proporcional `lock_ratio`; JEF: solo X/Y con
   `Doc::edit_grouped`, el tamaño se muestra), girar/espejar/escalar %/centrar (`Op`), paso de las

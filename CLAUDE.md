@@ -214,6 +214,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   pluma se aproxima según el zoom.
 - Ajuste de la vista: tras ajustar, mientras no se mueva la vista (`fit_size`), si el lienzo
   cambia de tamaño se vuelve a ajustar (la ventana se acomoda después del primer cuadro).
+- Vista realista (`realista.rs`, interruptor en la barra de estado, `Editor.realista`,
+  recordada en preferencias; por defecto activa): cada puntada es una cinta texturada (atlas
+  generado en código: hilo con perfil de cilindro y puntas hundidas, brillo aditivo con alfa 0,
+  sombra difusa) en una sola malla, en orden de bordado; tejido de la tela repetido
+  (`TextureWrapMode::Repeat`, se mueve con la vista). Con hilos de menos de `MINIMO_PX` se usan
+  las líneas de siempre. Lo usan `draw_stitches` (JEF y proyectos).
 - Cuadrícula (`draw_grid`): alineada al origen, paso adaptativo 1/5/10/50/100 mm (≥ 8 px),
   líneas fuertes cada 10 mm (o 5 pasos), ejes más oscuros. Regla: `Editor.ruler` (mm),
   Shift = múltiplos de 45° (`snap45`), Esc borra; sirve en JEF y proyectos.

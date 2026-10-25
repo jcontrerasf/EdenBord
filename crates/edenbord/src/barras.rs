@@ -236,6 +236,11 @@ impl Editor {
         ui.separator();
 
         let mut toggles = vec![
+            (
+                &mut self.realista,
+                iconos::REALISTA,
+                "Vista realista: hilos con volumen sobre la tela",
+            ),
             (&mut self.show_jumps, iconos::SALTOS, "Mostrar saltos"),
             (&mut self.show_hoop, iconos::BASTIDOR, "Mostrar bastidor"),
         ];

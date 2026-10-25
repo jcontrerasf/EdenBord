@@ -43,6 +43,7 @@ pub const AJUSTAR: &str = "\u{E1D0}"; // corners-out
 // Vista.
 pub const SALTOS: &str = "\u{E016}"; // arrow-arc-right
 pub const BASTIDOR: &str = "\u{E626}"; // frame-corners
+pub const REALISTA: &str = "\u{E6A2}"; // sparkle
 pub const CONTORNOS: &str = "\u{E69A}"; // selection
 
 // Transformar.

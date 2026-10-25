@@ -9,7 +9,7 @@ use jef::{Bounds, Jef, StitchKind};
 
 use crate::gestos::{self, Blanco, Gesto, Tipo};
 use crate::nodos::{self, Lado};
-use crate::{Editor, Tool};
+use crate::{Editor, Tool, realista};
 
 pub(crate) const SELECTION_COLOR: Color32 = Color32::from_rgb(30, 110, 230);
 const PEN_COLOR: Color32 = Color32::from_rgb(220, 0, 140);
@@ -65,10 +65,25 @@ impl Editor {
     pub(crate) fn canvas(&mut self, ui: &mut egui::Ui) {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         painter.rect_filled(response.rect, 0.0, self.fabric);
+        if self.realista && self.texturas.is_none() {
+            self.texturas = Some(realista::Texturas::new(ui.ctx()));
+        }
         if self.doc.is_some() {
             self.canvas_jef(ui, &response, &painter);
         } else if self.proyecto.is_some() {
             self.canvas_proyecto(ui, &response, &painter);
+        }
+    }
+
+    /// Texturas de la vista realista, si está activa.
+    fn texturas(&self) -> Option<&realista::Texturas> {
+        self.texturas.as_ref().filter(|_| self.realista)
+    }
+
+    /// Tejido de la tela (solo en la vista realista).
+    fn draw_fabric(&self, painter: &egui::Painter, rect: Rect, vista: Vista) {
+        if let Some(t) = self.texturas() {
+            t.tela(painter, rect, vista.origin, vista.scale * 10.0);
         }
     }
 
@@ -216,6 +231,7 @@ impl Editor {
             }
         }
         let vista = self.view_controls(ui, response, fit, true);
+        self.draw_fabric(painter, response.rect, vista);
         if self.show_grid {
             draw_grid(painter, vista, response.rect);
         }
@@ -235,6 +251,7 @@ impl Editor {
             progress,
             self.show_jumps,
             None,
+            self.texturas(),
         );
 
         // Marco de la selección.
@@ -339,6 +356,7 @@ impl Editor {
             fit.max_y = fit.max_y.max((r.y1 * 10.0) as i32);
         }
         let vista = self.view_controls(ui, response, fit, false);
+        self.draw_fabric(painter, response.rect, vista);
         match self.tool {
             Tool::Pen => self.pen_input(ui, response, vista),
             Tool::Select => self.select_input(ui, response, vista),
@@ -417,6 +435,7 @@ impl Editor {
             progress,
             self.show_jumps,
             moved.as_ref().map(|(m, af)| (m.as_slice(), *af)),
+            self.texturas(),
         );
 
         // Contornos: guías siempre; los demás solo si se piden o están seleccionados.
@@ -1191,6 +1210,7 @@ fn draw_stitches(
     progress: usize,
     show_jumps: bool,
     moved: Option<(&[bool], kurbo::Affine)>,
+    realista: Option<&realista::Texturas>,
 ) {
     let pt = |i: usize| {
         let s = jef.stitches[i];
@@ -1201,6 +1221,12 @@ fn draw_stitches(
             _ => vista.p(s.x, s.y),
         }
     };
+    // Vista realista solo si el hilo se ve con algo de grosor.
+    let hilo = realista::ancho_px(vista.scale * 10.0);
+    let realista = realista.filter(|_| hilo >= realista::MINIMO_PX);
+    let mut malla = realista.map(|t| t.malla());
+    let mut bloque = realista.map(|t| t.bloque());
+    let recorte = painter.clip_rect();
     // Grosor aproximado de un hilo (0,4 mm), con un mínimo para que se vea al alejar.
     let width = (4.0 * vista.scale).clamp(0.6, 6.0);
     let jump_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(40, 40, 40, 160));
@@ -1210,15 +1236,21 @@ fn draw_stitches(
             continue;
         }
         let [r, g, bl] = jef.thread_rgb(b);
-        let stroke = Stroke::new(width, Color32::from_rgb(r, g, bl));
+        let color = Color32::from_rgb(r, g, bl);
+        let stroke = Stroke::new(width, color);
         let end = block.end.min(progress);
         let mut run: Vec<Pos2> = Vec::new();
         for i in block.start..end {
             let s = jef.stitches[i];
             let p = pt(i);
             if s.kind == StitchKind::Normal {
+                let antes = i.checked_sub(1).map_or(vista.p(0, 0), pt);
+                if let Some(bl) = &mut bloque {
+                    bl.puntada(antes, p, hilo, color, recorte);
+                    continue;
+                }
                 if run.is_empty() {
-                    run.push(i.checked_sub(1).map_or(vista.p(0, 0), pt));
+                    run.push(antes);
                 }
                 push_point(&mut shapes, &mut run, p, stroke);
             } else {
@@ -1229,6 +1261,12 @@ fn draw_stitches(
             }
         }
         flush_run(&mut shapes, &mut run, stroke);
+        if let (Some(bl), Some(m)) = (&mut bloque, &mut malla) {
+            bl.cerrar(m);
+        }
+    }
+    if let Some(m) = malla {
+        painter.add(Shape::mesh(m));
     }
     painter.extend(shapes);
 }

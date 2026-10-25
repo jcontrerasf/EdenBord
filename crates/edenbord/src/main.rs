@@ -17,6 +17,7 @@ mod panel_proyecto;
 mod pluma;
 mod preferencias;
 mod proyecto;
+mod realista;
 mod tema;
 
 use std::path::{Path, PathBuf};
@@ -140,6 +141,10 @@ struct Editor {
     show_hoop: bool,
     show_grid: bool,
     show_outlines: bool,
+    /// Vista realista: hilos con volumen y sombra sobre la tela.
+    realista: bool,
+    /// Texturas de la vista realista (se crean la primera vez que hacen falta).
+    texturas: Option<realista::Texturas>,
     fabric: Color32,
     /// Gesto del ratón en curso sobre un proyecto (mover, manijas, rectángulo).
     gesto: Option<gestos::Gesto>,
@@ -197,6 +202,8 @@ impl Default for Editor {
             show_hoop: true,
             show_grid: true,
             show_outlines: false,
+            realista: true,
+            texturas: None,
             fabric: Color32::from_rgb(196, 190, 178),
             gesto: None,
             fondo_sel: false,
@@ -965,6 +972,7 @@ impl Editor {
         self.show_hoop = p.bastidor;
         self.show_grid = p.cuadricula;
         self.show_outlines = p.contornos;
+        self.realista = p.realista;
         let [r, g, b] = p.tela;
         self.fabric = Color32::from_rgb(r, g, b);
         ctx.set_zoom_factor(p.zoom_ui.clamp(0.5, 3.0));
@@ -978,6 +986,7 @@ impl Editor {
             bastidor: self.show_hoop,
             cuadricula: self.show_grid,
             contornos: self.show_outlines,
+            realista: self.realista,
             tela: [self.fabric.r(), self.fabric.g(), self.fabric.b()],
         }
     }

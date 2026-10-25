@@ -20,6 +20,8 @@ pub struct Preferencias {
     pub bastidor: bool,
     pub cuadricula: bool,
     pub contornos: bool,
+    /// Vista realista de las puntadas.
+    pub realista: bool,
     /// Color de la tela (RGB).
     pub tela: [u8; 3],
 }
@@ -33,6 +35,7 @@ impl Default for Preferencias {
             bastidor: true,
             cuadricula: true,
             contornos: false,
+            realista: true,
             tela: [196, 190, 178],
         }
     }
@@ -73,5 +76,9 @@ mod tests {
         assert!(p.saltos);
         assert_eq!(p.zoom_ui, 1.0);
         assert!(p.bastidor);
+        assert!(
+            p.realista,
+            "las preferencias viejas abren con la vista realista"
+        );
     }
 }

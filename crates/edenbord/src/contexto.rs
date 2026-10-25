@@ -16,8 +16,26 @@ impl Editor {
                 Tool::Nodes => self.ctx_nodes(ui),
                 Tool::Pen => self.ctx_pen(ui),
                 Tool::Ruler => self.ctx_ruler(ui),
+                Tool::Texto => self.ctx_text(ui),
             }
         });
+    }
+
+    fn ctx_text(&mut self, ui: &mut Ui) {
+        let ayuda = if self.writing().is_some() {
+            "Escribiendo · Enter: otra línea · Esc o clic afuera: terminar"
+        } else {
+            "Clic en el lienzo para escribir un texto · clic en un texto para seguirlo"
+        };
+        ui.label(RichText::new(ayuda).color(tema::TEXTO_SUAVE));
+        let fuente = self
+            .fuente
+            .clone()
+            .or_else(bordado::fuentes::predeterminada)
+            .map_or_else(|| "(sin fuentes)".to_string(), |f| f.nombre());
+        ui.separator();
+        ui.label(RichText::new(format!("Fuente: {fuente}")).color(tema::TEXTO_SUAVE))
+            .on_hover_text("Se cambia en Propiedades, con el texto elegido");
     }
 
     fn ctx_select(&mut self, ui: &mut Ui) {

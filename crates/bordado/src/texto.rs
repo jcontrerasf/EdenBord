@@ -1,38 +1,31 @@
 //! Texto a trazados con una fuente TrueType/OpenType (sin kerning ni ligaduras).
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-
 use kurbo::{BezPath, Point};
 
-/// Fuentes ya leídas, para no ir a disco cada vez que se regenera el diseño.
-static FUENTES: Mutex<Option<HashMap<PathBuf, Arc<Vec<u8>>>>> = Mutex::new(None);
-
-fn fuente(path: &Path) -> Result<Arc<Vec<u8>>, String> {
-    let mut cache = FUENTES.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = cache.get_or_insert_default();
-    if let Some(data) = cache.get(path) {
-        return Ok(data.clone());
-    }
-    let data = std::fs::read(path)
-        .map_err(|e| format!("no se pudo leer la fuente {}: {e}", path.display()))?;
-    let data = Arc::new(data);
-    cache.insert(path.to_path_buf(), data.clone());
-    Ok(data)
-}
+use crate::fuentes::{self, Fuente};
 
 /// Trazado del texto en mm: línea base en y = 0 empezando en x = 0, y hacia abajo.
 /// `alto` es el alto de las mayúsculas. Cada `\n` baja una línea.
-pub fn trazado(
+pub fn trazado(texto: &str, fuente: &Fuente, alto: f64, espaciado: f64) -> Result<BezPath, String> {
+    componer(texto, fuente, alto, espaciado).map(|(path, _)| path)
+}
+
+/// Dónde sigue el texto (para un cursor al escribir): punto en la línea base después del
+/// último carácter, en las mismas coordenadas que [`trazado`]. Un `\n` al final ya cuenta
+/// como línea nueva.
+pub fn fin(texto: &str, fuente: &Fuente, alto: f64, espaciado: f64) -> Result<Point, String> {
+    componer(texto, fuente, alto, espaciado).map(|(_, fin)| fin)
+}
+
+fn componer(
     texto: &str,
-    fuente_path: &Path,
+    fuente: &Fuente,
     alto: f64,
     espaciado: f64,
-) -> Result<BezPath, String> {
-    let data = fuente(fuente_path)?;
-    let face = ttf_parser::Face::parse(&data, 0)
-        .map_err(|e| format!("fuente inválida {}: {e}", fuente_path.display()))?;
+) -> Result<(BezPath, Point), String> {
+    let (data, index) = fuentes::datos(fuente)?;
+    let face = ttf_parser::Face::parse(&data, index)
+        .map_err(|e| format!("fuente inválida «{}»: {e}", fuente.nombre()))?;
     let mayus = face
         .capital_height()
         .filter(|&h| h > 0)
@@ -45,7 +38,8 @@ pub fn trazado(
         escala,
         origen: Point::ZERO,
     };
-    for (n, linea) in texto.lines().enumerate() {
+    for (n, linea) in texto.split('\n').enumerate() {
+        let linea = linea.strip_suffix('\r').unwrap_or(linea);
         out.origen = Point::new(0.0, n as f64 * interlineado);
         for c in linea.chars() {
             let Some(g) = face.glyph_index(c) else {
@@ -56,7 +50,7 @@ pub fn trazado(
             out.origen.x += f64::from(avance) * escala + espaciado;
         }
     }
-    Ok(out.path)
+    Ok((out.path, out.origen))
 }
 
 struct Trazador {
@@ -94,5 +88,26 @@ impl ttf_parser::OutlineBuilder for Trazador {
     }
     fn close(&mut self) {
         self.path.close_path();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn end_point_follows_the_text() {
+        let Some(f) = fuentes::predeterminada() else {
+            eprintln!("aviso: el sistema no tiene fuentes; prueba saltada");
+            return;
+        };
+        assert_eq!(fin("", &f, 10.0, 0.0).unwrap(), Point::ZERO);
+        let a = fin("Ho", &f, 10.0, 0.0).unwrap();
+        let b = fin("Hola", &f, 10.0, 0.0).unwrap();
+        assert!(a.y == 0.0 && b.x > a.x && a.x > 0.0);
+        let c = fin("Hola\n", &f, 10.0, 0.0).unwrap();
+        assert!(c.x == 0.0 && c.y > 10.0, "{c:?}");
+        // Más espacio entre letras: termina más a la derecha.
+        assert!(fin("Hola", &f, 10.0, 1.0).unwrap().x > b.x + 3.9);
     }
 }

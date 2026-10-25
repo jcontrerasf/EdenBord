@@ -112,6 +112,20 @@ impl ProyectoDoc {
         }
     }
 
+    /// Cuántas versiones hay para deshacer (ver [`discard_since`](Self::discard_since)).
+    pub fn history_len(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Deshace todo lo hecho desde que el historial tenía `len` versiones, sin dejarlo para
+    /// rehacer: como si no hubiera pasado (un texto nuevo que quedó vacío).
+    pub fn discard_since(&mut self, len: usize) {
+        while self.undo.len() > len {
+            self.undo();
+        }
+        self.redo.clear();
+    }
+
     pub fn redo(&mut self) {
         if let Some(next) = self.redo.pop() {
             let current = self.restore(next);

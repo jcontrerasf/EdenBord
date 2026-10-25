@@ -18,8 +18,10 @@ pub enum SvgError {
 
 /// Lee un SVG y devuelve sus trazados en mm, centrados en el origen.
 pub fn importar(data: &[u8]) -> Result<Vec<Objeto>, SvgError> {
-    let mut opciones = usvg::Options::default();
-    opciones.fontdb_mut().load_system_fonts();
+    let opciones = usvg::Options {
+        fontdb: crate::fuentes::base().clone(),
+        ..Default::default()
+    };
     let tree = usvg::Tree::from_data(data, &opciones)?;
     let mut objetos = Vec::new();
     recorrer(tree.root(), &mut objetos);

@@ -5,6 +5,7 @@
 //! a generar, cosa que un JEF no permite.
 
 pub mod booleanas;
+pub mod fuentes;
 pub mod geom;
 mod proyecto;
 pub mod puntadas;
@@ -334,7 +335,7 @@ mod tests {
             color: 3,
             forma: Forma::Texto {
                 texto: "A".into(),
-                fuente: "no-existe.ttf".into(),
+                fuente: fuentes::Fuente::archivo("no-existe.ttf"),
                 alto: 10.0,
                 espaciado: 0.0,
                 afin: Affine::IDENTITY.as_coeffs(),

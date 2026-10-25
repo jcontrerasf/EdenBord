@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use kurbo::{Affine, BezPath, PathEl};
 use serde::{Deserialize, Serialize};
 
+use crate::fuentes::Fuente;
+
 /// Valor del campo `formato`, para reconocer el archivo.
 pub const FORMATO: &str = "edenbord";
 /// Valor de `formato` en los proyectos anteriores al nombre EdenBord (extensión `.bordado`).
@@ -103,7 +105,7 @@ pub enum Forma {
     /// Texto con una fuente TrueType/OpenType; se convierte en contorno al generar.
     Texto {
         texto: String,
-        fuente: PathBuf,
+        fuente: Fuente,
         /// Alto de las mayúsculas, en mm.
         alto: f64,
         /// Espacio extra entre letras, en mm.
@@ -739,6 +741,12 @@ fn migrar(valor: &mut serde_json::Value) {
         return;
     };
     for o in objetos {
+        // v1: `texto {fuente: "ruta.ttf"}` → `fuente {ruta}`.
+        if let Some(fuente) = o.pointer_mut("/forma/fuente")
+            && let Value::String(ruta) = fuente
+        {
+            *fuente = serde_json::json!({ "ruta": ruta });
+        }
         let Some(p) = o.get_mut("puntada").and_then(Value::as_object_mut) else {
             continue;
         };
@@ -848,7 +856,7 @@ mod tests {
             color: 1,
             forma: Forma::Texto {
                 texto: "Hola".into(),
-                fuente: "fuente.ttf".into(),
+                fuente: Fuente::archivo("fuente.ttf"),
                 alto: 8.0,
                 espaciado: 0.5,
                 afin: Affine::translate((1.0, 2.0)).as_coeffs(),
@@ -1005,6 +1013,15 @@ mod tests {
         );
         // Releer lo guardado no cambia nada (la migración no se aplica dos veces).
         assert_eq!(Proyecto::leer(&p.guardar()).unwrap(), p);
+        let texto = r#"{"formato":"edenbord","version":1,"bastidor":0,"objetos":[
+            {"nombre":"t","color":1,"puntada":{"tipo":"ninguna"},"forma":{"tipo":"texto",
+             "texto":"Hola","fuente":"/x/a.ttf","alto":10.0,"afin":[1,0,0,1,0,0]}}]}"#;
+        let p = Proyecto::leer(texto).unwrap();
+        let Forma::Texto { fuente, .. } = &p.objetos[0].forma else {
+            panic!("no es texto");
+        };
+        assert_eq!(*fuente, Fuente::archivo("/x/a.ttf"));
+        assert!(p.guardar().contains(r#""ruta": "/x/a.ttf""#));
         let pegado = format!(
             r#"{{"formato":"edenbord-objetos","objetos":[{}]}}"#,
             objeto(r#"{"tipo":"satin","ancho":3.0,"densidad":0.4,"base":false}"#)

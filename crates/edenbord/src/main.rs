@@ -9,6 +9,7 @@ mod barras;
 mod canvas;
 mod contexto;
 mod doc;
+mod escribir;
 mod gestos;
 mod iconos;
 mod lista;
@@ -19,6 +20,7 @@ mod pluma;
 mod preferencias;
 mod proyecto;
 mod realista;
+mod selector_fuente;
 mod tema;
 
 use std::path::{Path, PathBuf};
@@ -41,6 +43,8 @@ const ICON: &[u8] = include_bytes!("../../../assets/edenbord-256.png");
 
 fn main() -> eframe::Result {
     let initial = std::env::args_os().nth(1).map(PathBuf::from);
+    // Leer las fuentes del sistema demora: se hace de antemano, así agregar un texto no espera.
+    std::thread::spawn(|| bordado::fuentes::familias().len());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP)
@@ -103,6 +107,8 @@ enum Tool {
     Pen,
     /// Medir: arrastrar de un punto a otro.
     Ruler,
+    /// Escribir: clic pone un texto nuevo (o edita uno) y se escribe en el lienzo.
+    Texto,
 }
 
 struct Editor {
@@ -115,8 +121,10 @@ struct Editor {
     about: bool,
     /// Bloque (JEF) u objeto (proyecto) cuyo color se está eligiendo.
     picking_color: Option<usize>,
-    /// Última fuente usada para agregar texto.
-    last_font: Option<PathBuf>,
+    /// Fuente de los textos nuevos: la última elegida (`None` = la del sistema).
+    fuente: Option<bordado::fuentes::Fuente>,
+    /// Texto que se está escribiendo en el lienzo (herramienta Texto).
+    escritura: Option<escribir::Escritura>,
     tool: Tool,
     pen: pluma::Pluma,
     /// Medida de la regla: inicio y fin en mm.
@@ -186,7 +194,8 @@ impl Default for Editor {
             pending: None,
             about: false,
             picking_color: None,
-            last_font: None,
+            fuente: None,
+            escritura: None,
             tool: Tool::Select,
             pen: pluma::Pluma::default(),
             ruler: None,
@@ -358,6 +367,7 @@ impl Editor {
         self.pen = pluma::Pluma::default();
         self.ruler = None;
         self.gesto = None;
+        self.escritura = None;
         self.fondo_sel = false;
         self.nodos_obj = None;
         self.nodos_sel.clear();
@@ -451,13 +461,15 @@ impl Editor {
             .fold((0, 0), |acc, (_, dx, dy)| (acc.0 + dx, acc.1 + dy));
             (undo, redo, save, arrows)
         });
-        // Herramientas: S seleccionar, N nodos, P pluma, R regla (pluma y nodos solo en proyectos).
+        // Herramientas: S seleccionar, N nodos, P pluma, R regla, T texto (pluma, nodos y texto
+        // solo en proyectos).
         let tool = ctx.input_mut(|i| {
             [
                 (Key::S, Tool::Select),
                 (Key::N, Tool::Nodes),
                 (Key::P, Tool::Pen),
                 (Key::R, Tool::Ruler),
+                (Key::T, Tool::Texto),
             ]
             .into_iter()
             .find(|&(k, _)| i.consume_key(Modifiers::NONE, k))
@@ -982,6 +994,7 @@ impl Editor {
         self.show_grid = p.cuadricula;
         self.show_outlines = p.contornos;
         self.realista = p.realista;
+        self.fuente = p.fuente;
         let [r, g, b] = p.tela;
         self.fabric = Color32::from_rgb(r, g, b);
         ctx.set_zoom_factor(p.zoom_ui.clamp(0.5, 3.0));
@@ -996,6 +1009,7 @@ impl Editor {
             cuadricula: self.show_grid,
             contornos: self.show_outlines,
             realista: self.realista,
+            fuente: self.fuente.clone(),
             tela: [self.fabric.r(), self.fabric.g(), self.fabric.b()],
         }
     }
@@ -1055,7 +1069,12 @@ impl eframe::App for Editor {
             self.request_open(Some(path));
         }
         if self.pending.is_none() {
-            self.shortcuts(ctx);
+            // Mientras se escribe en el lienzo, las teclas son del texto, no atajos.
+            if self.escritura.is_some() {
+                self.text_keys(ctx);
+            } else {
+                self.shortcuts(ctx);
+            }
         }
 
         if self.playing
@@ -1074,7 +1093,10 @@ impl eframe::App for Editor {
         }
         // Una edición agrupada (arrastrar un valor, escribir) termina al soltar el ratón y
         // dejar el campo: la siguiente, aunque sea del mismo campo, es otro deshacer.
-        let idle = ctx.input(|i| !i.pointer.any_down()) && ctx.memory(|m| m.focused()).is_none();
+        // Escribir en el lienzo también es una edición agrupada, hasta terminar el texto.
+        let idle = ctx.input(|i| !i.pointer.any_down())
+            && ctx.memory(|m| m.focused()).is_none()
+            && self.escritura.is_none();
         if idle && let Some(doc) = &mut self.proyecto {
             doc.end_group();
         }

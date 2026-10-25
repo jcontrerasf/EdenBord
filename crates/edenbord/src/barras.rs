@@ -143,6 +143,11 @@ impl Editor {
                      nodo · Supr: borrar nodo",
                 ));
                 tools.push((Tool::Pen, iconos::PLUMA, "Pluma (P) · calcar contornos"));
+                tools.push((
+                    Tool::Texto,
+                    iconos::TEXTO,
+                    "Texto (T) · clic: escribir ahí · clic en un texto: seguir escribiéndolo",
+                ));
             }
             tools.push((
                 Tool::Ruler,
@@ -153,11 +158,6 @@ impl Editor {
                 if tema::interruptor(ui, self.tool == tool, ico, ayuda).clicked() {
                     self.set_tool(tool);
                 }
-            }
-            if self.proyecto.is_some()
-                && tema::boton_icono(ui, iconos::TEXTO, "Agregar texto…").clicked()
-            {
-                self.add_text();
             }
             ui.separator();
             if tema::interruptor(ui, self.show_grid, iconos::CUADRICULA, "Cuadrícula en mm")
@@ -175,6 +175,9 @@ impl Editor {
     pub(crate) fn set_tool(&mut self, tool: Tool) {
         if self.tool == Tool::Ruler && tool != Tool::Ruler {
             self.ruler = None;
+        }
+        if tool != Tool::Texto {
+            self.finish_text();
         }
         self.tool = tool;
     }

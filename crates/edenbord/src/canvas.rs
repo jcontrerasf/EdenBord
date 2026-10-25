@@ -96,6 +96,7 @@ impl Editor {
             Tool::Select => false,
             Tool::Pen | Tool::Nodes => self.proyecto.is_some(),
             Tool::Ruler => true,
+            Tool::Texto => self.proyecto.is_some(),
         }
     }
 
@@ -364,6 +365,7 @@ impl Editor {
             Tool::Pen => self.pen_input(ui, response, vista),
             Tool::Select => self.select_input(ui, response, vista),
             Tool::Nodes => self.nodes_input(ui, response, vista),
+            Tool::Texto => self.text_input(ui, response, vista),
             Tool::Ruler => {}
         }
 
@@ -486,6 +488,7 @@ impl Editor {
         if self.tool == Tool::Pen {
             self.draw_pen(painter, response, vista);
         }
+        self.draw_text_cursor(ui, painter, vista);
         self.draw_gesture(painter, response, vista);
         if let Some(GestoNodo::Caja { a, b, .. }) = self.gesto_nodo {
             draw_box(painter, Rect::from_two_pos(vista.mm(a), vista.mm(b)));
@@ -1010,6 +1013,64 @@ impl Editor {
                 painter.circle(p, 4.0, fill, stroke);
             }
         }
+    }
+
+    /// Herramienta Texto: clic en un texto lo sigue editando; en otro lugar crea uno nuevo
+    /// con la línea base ahí. Mientras se escribe, clic afuera termina.
+    fn text_input(&mut self, ui: &egui::Ui, response: &Response, vista: Vista) {
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+        if !response.clicked_by(egui::PointerButton::Primary) {
+            return;
+        }
+        let Some(pos) = response.interact_pointer_pos() else {
+            return;
+        };
+        let p = vista.to_mm(pos);
+        let tol = f64::from(PICK_PX / (10.0 * vista.scale));
+        let doc = self.proyecto.as_ref().unwrap();
+        let texto = doc
+            .object_at(p, tol)
+            .filter(|&i| matches!(doc.proyecto.objetos[i].forma, bordado::Forma::Texto { .. }));
+        match (texto, self.writing()) {
+            (Some(i), Some(j)) if i == j => {}
+            (Some(i), _) => self.edit_text(i),
+            // Escribiendo, el clic afuera solo termina.
+            (None, Some(_)) => self.finish_text(),
+            (None, None) => self.new_text_at(p),
+        }
+    }
+
+    /// Cursor del texto que se escribe.
+    fn draw_text_cursor(&self, ui: &egui::Ui, painter: &egui::Painter, vista: Vista) {
+        let Some((i, antes)) = self.writing_cursor() else {
+            return;
+        };
+        let doc = self.proyecto.as_ref().unwrap();
+        let bordado::Forma::Texto {
+            fuente,
+            alto,
+            espaciado,
+            afin,
+            ..
+        } = &doc.proyecto.objetos[i].forma
+        else {
+            return;
+        };
+        let Ok(fin) = bordado::texto::fin(&antes, fuente, *alto, *espaciado) else {
+            return;
+        };
+        let af = kurbo::Affine::new(*afin);
+        let arriba = vista.mm(af * (fin + kurbo::Vec2::new(0.0, -alto * 1.05)));
+        let abajo = vista.mm(af * (fin + kurbo::Vec2::new(0.0, alto * 0.25)));
+        // Parpadea como un cursor de texto.
+        let t = ui.input(|i| i.time);
+        if t.fract() < 0.6 {
+            painter.line_segment([arriba, abajo], Stroke::new(2.0, crate::tema::COPIHUE));
+        }
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
     }
 
     /// Rectángulo de selección y medidas del gesto junto al puntero.

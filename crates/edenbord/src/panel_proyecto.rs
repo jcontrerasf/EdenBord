@@ -1,15 +1,12 @@
 //! Panel derecho de un proyecto `.edenbord` (objetos y propiedades), guardar y exportar.
 
-use std::path::PathBuf;
-
-use bordado::{
-    BaseSatin, Fondo, Forma, Lado, Motivo, Objeto, Patron, Proyecto, Puntada, preset_por_nombre,
-};
+use bordado::fuentes::Fuente;
+use bordado::{BaseSatin, Fondo, Forma, Lado, Motivo, Objeto, Patron, Proyecto, Puntada};
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
-use kurbo::{Affine, Point, Shape};
 
 use crate::realista::Texturas;
+use crate::selector_fuente::{self, Pedido};
 use crate::tema::AVISO as WARNING;
 use crate::{Editor, file_name, iconos, lista, paleta, tema, write_verified};
 
@@ -298,57 +295,30 @@ impl Editor {
         }
     }
 
-    fn pick_font(&mut self) -> Option<PathBuf> {
+    /// Elige un archivo de fuente propio.
+    pub(crate) fn pick_font(&mut self) -> Option<Fuente> {
         let mut dialog = rfd::FileDialog::new().add_filter("Fuente", &["ttf", "otf", "TTF", "OTF"]);
-        if let Some(dir) = self.last_font.as_deref().and_then(|p| p.parent()) {
+        if let Some(dir) = self
+            .fuente
+            .as_ref()
+            .and_then(|f| f.ruta.as_deref())
+            .and_then(|p| p.parent())
+        {
             dialog = dialog.set_directory(dir);
         }
-        let path = dialog.pick_file()?;
-        self.last_font = Some(path.clone());
-        Some(path)
+        Some(Fuente::archivo(dialog.pick_file()?))
     }
 
-    /// Agrega un texto centrado en el bastidor, con relleno.
-    pub(crate) fn add_text(&mut self) {
-        let Some(fuente) = self.last_font.clone().or_else(|| self.pick_font()) else {
+    /// Cambia la fuente de los textos seleccionados; queda como la de los textos nuevos.
+    fn change_font(&mut self, pedido: Pedido) {
+        let nueva = match pedido {
+            Pedido::Fuente(f) => Some(f),
+            Pedido::Archivo => self.pick_font(),
+        };
+        let Some(nueva) = nueva else {
             return;
         };
-        let mut obj = Objeto {
-            nombre: "texto".into(),
-            visible: true,
-            color: 1,
-            forma: Forma::Texto {
-                texto: "Texto".into(),
-                fuente,
-                alto: 10.0,
-                espaciado: 0.0,
-                afin: Affine::IDENTITY.as_coeffs(),
-            },
-            puntada: preset_por_nombre("Relleno horizontal"),
-            opacidad: bordado::OPACIDAD_GUIA,
-            bloqueado: false,
-        };
-        match obj.trazado() {
-            Ok(d) => {
-                let c = d.bounding_box().center();
-                obj.transformar(Affine::translate(Point::ZERO - c));
-                if let Some(doc) = &mut self.proyecto {
-                    doc.add(vec![obj]);
-                }
-                self.info("Texto agregado: edítalo en Propiedades");
-            }
-            Err(e) => {
-                self.last_font = None;
-                self.error(e);
-            }
-        }
-    }
-
-    /// Cambia la fuente de los textos seleccionados.
-    fn change_font(&mut self, path: Option<PathBuf>) {
-        let Some(path) = path.or_else(|| self.pick_font()) else {
-            return;
-        };
+        self.fuente = Some(nueva.clone());
         let Some(doc) = &mut self.proyecto else {
             return;
         };
@@ -356,7 +326,7 @@ impl Editor {
         doc.edit(|p| {
             for i in sel {
                 if let Forma::Texto { fuente, .. } = &mut p.objetos[i].forma {
-                    *fuente = path.clone();
+                    *fuente = nueva.clone();
                 }
             }
         });
@@ -504,8 +474,7 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
     pick
 }
 
-/// Nombre, forma y puntada de la selección. Devuelve `Some` si se pidió cambiar la fuente
-/// (`Some(None)` = elegir archivo).
+/// Nombre, forma y puntada de la selección. Devuelve `Some` si se pidió cambiar la fuente.
 /// Propiedades de la selección. Con varios objetos, los cambios de parámetros se aplican a
 /// los que tienen el mismo tipo de puntada que el primero (solo el valor cambiado).
 /// `pick_color` recibe el objeto cuyo color se quiere cambiar.
@@ -514,7 +483,7 @@ fn properties_section(
     doc: &mut crate::proyecto::ProyectoDoc,
     texturas: &Texturas,
     pick_color: &mut Option<usize>,
-) -> Option<Option<PathBuf>> {
+) -> Option<Pedido> {
     let sel = doc.selection();
     if sel.is_empty() {
         ui.weak("Selecciona objetos para elegir su tipo de puntada.");
@@ -655,12 +624,7 @@ fn properties_section(
                     .suffix(" mm"),
             );
         });
-        ui.horizontal(|ui| {
-            ui.label(format!("Fuente: {}", file_name(fuente)));
-            if ui.button("Cambiar…").clicked() {
-                font = Some(None);
-            }
-        });
+        font = selector_fuente::selector(ui, fuente, texto);
         if ui
             .add_enabled(
                 !doc.lineas[i].is_empty(),

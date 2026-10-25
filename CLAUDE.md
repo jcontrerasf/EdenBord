@@ -97,7 +97,9 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
   `OPACIDAD_GUIA` = 0,15). `bloqueado` (solo se escribe si es `true`): no se elige en el lienzo.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
-  `texto {texto, fuente (ruta), alto (mayúsculas, mm), espaciado, afin [6]}`. `d` es el `d` de
+  `texto {texto, fuente, alto (mayúsculas, mm), espaciado, afin [6]}`; `fuente` =
+  `fuentes::Fuente {familia?, peso, cursiva, ruta?}` (familia del sistema por nombre, con la
+  ruta de respaldo; o solo `ruta` = archivo propio). v1 guardaba la ruta como texto: `migrar`. `d` es el `d` de
   SVG (kurbo `BezPath`), guardado con 3 decimales. Transformar un texto compone su `afin`.
 - `Puntada` (`tipo`, snake_case): `ninguna` (guía) | líneas (siguen el trazado; en zonas, el
   borde): `corrido {largo, pasadas}` (1/3/5… = simple/triple/bean), `manual`,
@@ -134,6 +136,10 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   Varias zonas = `operar_varias` (de a pares, en orden).
 - `Puntada::copiar_cambios(antes, despues)`: copia solo los parámetros que cambiaron (edición
   de varios objetos sin pisar lo distinto de cada uno). Genérico: compara los campos del JSON.
+- `fuentes.rs`: base de fuentes del sistema (`usvg::fontdb`, `OnceLock`, compartida con
+  `svg.rs`), `familias`, `estilos`, `predeterminada` (lista de sans serif preferidas: fontdb no
+  lee la de fontconfig), `datos` (bytes + índice de cara, caché de 12). La app las carga en un
+  hilo al iniciar.
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
 ## App (`crates/edenbord/src`)
@@ -180,8 +186,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `set_nodes_live` (solo polilíneas) mientras, `sync` al soltar. Doble clic = insertar,
   Supr = borrar (mínimo 3 cerrado / 2 abierto), "Esquina ↔ curva". Textos: "Convertir en
   trazado".
-- Atajos (`shortcuts`, `clipboard_shortcuts`; no corren si un campo tiene el foco): S/N/P/R
-  herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
+- Atajos (`shortcuts`, `clipboard_shortcuts`; no corren si un campo tiene el foco ni mientras
+  se escribe un texto en el lienzo): S/N/P/R/T herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
   puntero), Ctrl+Shift+V (en el mismo lugar, vía `ViewportCommand::RequestPaste`), Ctrl+D,
   Ctrl+A, Esc, Supr (objetos, nodos o el fondo elegido), flechas.
 - Hay a lo sumo un documento abierto: `Editor.doc` (JEF) **o** `Editor.proyecto`. Abrir decide
@@ -238,6 +244,15 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   confirmación antes de sobrescribir el archivo abierto.
 - `progress == usize::MAX` significa "mostrar todo" (para que la simulación no corte diseños
   que crecen al editar).
+- Herramienta Texto (`Tool::Texto`, T; `escribir.rs`): clic crea un texto vacío con la línea
+  base ahí (`new_text_at`) o sigue uno existente (`edit_text`); mientras `Editor.escritura`,
+  `text_keys` toma `Event::Text`/`Paste`, Retroceso/Supr, flechas, Inicio/Fin, Enter (línea
+  nueva) y Esc (termina y vuelve a Seleccionar) en vez de los atajos; `Escritura.cursor` en
+  caracteres, `editar` es pura y con tests, como una edición agrupada. Un texto nuevo que
+  queda vacío se descarta también del historial (`discard_since`). El cursor sale de
+  `bordado::texto::fin`. Fuente: `Editor.fuente` (última elegida, en preferencias) o
+  `fuentes::predeterminada()`. `selector_fuente.rs`: familias con buscador y vista
+  previa (glifos rellenos con `trapecios`), estilo, «Usar un archivo…».
 - `tema.rs`: tema claro "lino" (paleta del icono: copihue = acento, hoja = acción principal,
   `AVISO` dorado oscuro), Inter + Phosphor incrustadas (`assets/fuentes/`, ver su `LEEME.md`:
   Inter va recortada sin el área de uso privado, si no tapa los íconos). Helpers

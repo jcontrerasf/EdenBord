@@ -22,6 +22,8 @@ pub struct Preferencias {
     pub contornos: bool,
     /// Vista realista de las puntadas.
     pub realista: bool,
+    /// Fuente de los textos nuevos (la última elegida).
+    pub fuente: Option<bordado::fuentes::Fuente>,
     /// Color de la tela (RGB).
     pub tela: [u8; 3],
 }
@@ -36,6 +38,7 @@ impl Default for Preferencias {
             cuadricula: true,
             contornos: false,
             realista: true,
+            fuente: None,
             tela: [196, 190, 178],
         }
     }

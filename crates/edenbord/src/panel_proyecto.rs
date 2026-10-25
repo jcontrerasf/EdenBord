@@ -2,7 +2,10 @@
 
 use std::path::PathBuf;
 
-use bordado::{Fondo, Forma, Objeto, PRESETS, Proyecto, Puntada};
+use bordado::{
+    BaseSatin, Fondo, Forma, Lado, Motivo, Objeto, PRESETS, Patron, Proyecto, Puntada,
+    preset_por_nombre,
+};
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
 use kurbo::{Affine, Point, Shape};
@@ -320,7 +323,7 @@ impl Editor {
                 espaciado: 0.0,
                 afin: Affine::IDENTITY.as_coeffs(),
             },
-            puntada: preset("Relleno horizontal"),
+            puntada: preset_por_nombre("Relleno horizontal"),
             opacidad: bordado::OPACIDAD_GUIA,
             bloqueado: false,
         };
@@ -357,14 +360,6 @@ impl Editor {
             }
         });
     }
-}
-
-/// Puntada de un preset por nombre.
-fn preset(name: &str) -> Puntada {
-    PRESETS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map_or(Puntada::Ninguna, |(_, p)| p.clone())
 }
 
 fn info_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) {
@@ -426,12 +421,7 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
     for i in 0..n {
         let obj = &doc.proyecto.objetos[i];
         let [r, g, b] = jef::palette::thread(obj.color).map_or([128; 3], |t| t.rgb);
-        let icon = match obj.puntada {
-            Puntada::Ninguna => iconos::GUIA,
-            Puntada::Corrido { .. } => iconos::CORRIDO,
-            Puntada::Satin { .. } => iconos::SATIN,
-            Puntada::Relleno { .. } => iconos::RELLENO,
-        };
+        let icon = icono_puntada(&obj.puntada);
         let mut label = egui::RichText::new(&obj.nombre);
         if obj.puntada == Puntada::Ninguna {
             label = label.italics().color(tema::TEXTO_SUAVE);
@@ -545,9 +535,14 @@ fn properties_section(
         egui::ComboBox::from_id_salt("preset")
             .selected_text(first.puntada.nombre())
             .show_ui(ui, |ui| {
-                for (name, p) in PRESETS {
-                    if ui.selectable_label(false, *name).clicked() {
-                        chosen = Some(p.clone());
+                for p in PRESETS {
+                    let texto = format!("{} {}", icono_puntada(&p.puntada), p.nombre);
+                    if ui
+                        .selectable_label(false, texto)
+                        .on_hover_text(p.descripcion)
+                        .clicked()
+                    {
+                        chosen = Some(p.puntada.clone());
                     }
                 }
             });
@@ -556,17 +551,14 @@ fn properties_section(
         doc.edit(|proj| {
             for &i in &sel {
                 let o = &mut proj.objetos[i];
-                if o.es_zona() || !matches!(p, Puntada::Relleno { .. }) {
+                if o.es_zona() || !p.solo_zonas() {
                     o.puntada = p.clone();
                 }
             }
         });
     }
     if sel.iter().any(|&i| !doc.proyecto.objetos[i].es_zona())
-        && matches!(
-            doc.proyecto.objetos[sel[0]].puntada,
-            Puntada::Relleno { .. }
-        )
+        && doc.proyecto.objetos[sel[0]].puntada.solo_zonas()
     {
         ui.colored_label(WARNING, "Las líneas no se pueden rellenar");
     }
@@ -590,10 +582,7 @@ fn properties_section(
         let antes = doc.proyecto.objetos[sel[0]].puntada.clone();
         let mismos = sel
             .iter()
-            .filter(|&&i| {
-                std::mem::discriminant(&doc.proyecto.objetos[i].puntada)
-                    == std::mem::discriminant(&antes)
-            })
+            .filter(|&&i| doc.proyecto.objetos[i].puntada.tipo() == antes.tipo())
             .count();
         if mismos < sel.len() && antes != Puntada::Ninguna {
             ui.weak(format!(
@@ -717,6 +706,27 @@ fn opacity_slider(ui: &mut egui::Ui, opacidad: &mut f32) -> bool {
     .inner
 }
 
+/// Ícono del tipo de puntada (lista de objetos y paleta).
+pub(crate) fn icono_puntada(p: &Puntada) -> &'static str {
+    match p {
+        Puntada::Ninguna => iconos::GUIA,
+        Puntada::Corrido { .. } => iconos::CORRIDO,
+        Puntada::Manual => iconos::MANUAL,
+        Puntada::PuntoAtras { .. } => iconos::PUNTO_ATRAS,
+        Puntada::Tallo { .. } => iconos::TALLO,
+        Puntada::Feston { .. } => iconos::FESTON,
+        Puntada::Motivo { .. } => iconos::MOTIVO,
+        Puntada::Satin { .. } => iconos::SATIN,
+        Puntada::Relleno {
+            separacion_final: Some(_),
+            ..
+        } => iconos::DEGRADE,
+        Puntada::Relleno { .. } => iconos::RELLENO,
+        Puntada::Concentrico { .. } => iconos::CONCENTRICO,
+        Puntada::Cuadrille { .. } => iconos::CUADRILLE,
+    }
+}
+
 /// Controles de los parámetros de una puntada.
 fn puntada_params(ui: &mut egui::Ui, puntada: &mut Puntada) {
     fn mm(v: &mut f64, range: std::ops::RangeInclusive<f64>) -> egui::DragValue<'_> {
@@ -725,32 +735,120 @@ fn puntada_params(ui: &mut egui::Ui, puntada: &mut Puntada) {
             .speed(0.01)
             .suffix(" mm")
     }
+    fn grados(v: &mut f64) -> egui::DragValue<'_> {
+        egui::DragValue::new(v)
+            .range(-180.0..=180.0)
+            .speed(1.0)
+            .suffix("°")
+    }
+    /// Una fila: etiqueta (con explicación al pasar el puntero) y control.
+    fn fila(ui: &mut egui::Ui, nombre: &str, ayuda: &str, control: impl egui::Widget) {
+        ui.label(nombre).on_hover_text(ayuda);
+        ui.add(control).on_hover_text(ayuda);
+        ui.end_row();
+    }
+    /// Selector de una lista de opciones con nombre.
+    fn opciones<T: Copy + PartialEq>(
+        ui: &mut egui::Ui,
+        nombre: &str,
+        valor: &mut T,
+        todas: &[T],
+        texto: fn(T) -> &'static str,
+    ) {
+        ui.label(nombre);
+        egui::ComboBox::from_id_salt(nombre)
+            .selected_text(texto(*valor))
+            .show_ui(ui, |ui| {
+                for &o in todas {
+                    ui.selectable_value(valor, o, texto(o));
+                }
+            });
+        ui.end_row();
+    }
+    const LARGO: &str = "Largo de cada puntada: más corto sigue mejor las curvas";
+    const ANCHO: &str = "Ancho total de la línea";
     egui::Grid::new("params")
         .num_columns(2)
         .show(ui, |ui| match puntada {
-            Puntada::Ninguna => {}
-            Puntada::Corrido { largo, triple } => {
-                ui.label("Largo");
-                ui.add(mm(largo, 0.5..=6.0));
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(triple, "Triple (más grueso)");
-                ui.end_row();
+            Puntada::Ninguna | Puntada::Manual => {}
+            Puntada::Corrido { largo, pasadas } => {
+                fila(ui, "Largo", LARGO, mm(largo, 0.5..=6.0));
+                fila(
+                    ui,
+                    "Pasadas",
+                    "Veces que se cose cada puntada: 1 fina, 3 triple, 5 o más gruesa",
+                    egui::Slider::new(pasadas, 1..=9).step_by(2.0),
+                );
+            }
+            Puntada::PuntoAtras { largo } => {
+                fila(
+                    ui,
+                    "Largo",
+                    "Lo que avanza cada vuelta atrás",
+                    mm(largo, 0.8..=5.0),
+                );
+            }
+            Puntada::Tallo { largo, ancho } => {
+                fila(ui, "Largo", LARGO, mm(largo, 1.0..=6.0));
+                fila(
+                    ui,
+                    "Ancho",
+                    "Cuánto se inclinan las puntadas",
+                    mm(ancho, 0.0..=4.0),
+                );
+            }
+            Puntada::Feston {
+                ancho,
+                separacion,
+                lado,
+            } => {
+                fila(ui, "Ancho", "Largo de los dientes", mm(ancho, 0.5..=10.0));
+                fila(
+                    ui,
+                    "Separación",
+                    "Distancia entre dientes",
+                    mm(separacion, 0.5..=10.0),
+                );
+                opciones(ui, "Lado", lado, &Lado::TODOS, Lado::nombre);
+            }
+            Puntada::Motivo {
+                motivo,
+                largo,
+                ancho,
+            } => {
+                opciones(ui, "Motivo", motivo, &Motivo::TODOS, Motivo::nombre);
+                fila(
+                    ui,
+                    "Largo",
+                    "Largo de cada repetición",
+                    mm(largo, 1.0..=20.0),
+                );
+                fila(ui, "Ancho", ANCHO, mm(ancho, 0.5..=15.0));
             }
             Puntada::Satin {
                 ancho,
                 densidad,
                 base,
+                compensacion,
+                ahusado,
             } => {
-                ui.label("Ancho");
-                ui.add(mm(ancho, 0.5..=10.0));
-                ui.end_row();
-                ui.label("Densidad")
-                    .on_hover_text("Distancia entre puntadas del mismo lado");
-                ui.add(mm(densidad, 0.2..=2.0));
-                ui.end_row();
+                fila(ui, "Ancho", "Ancho de la columna", mm(ancho, 0.5..=10.0));
+                fila(
+                    ui,
+                    "Densidad",
+                    "Distancia entre puntadas del mismo lado: menos = más tupido",
+                    mm(densidad, 0.2..=3.0),
+                );
+                fila(
+                    ui,
+                    "Compensación",
+                    "Ensancha cada lado: el hilo tira y la columna queda más angosta",
+                    mm(compensacion, -0.5..=1.0),
+                );
+                opciones(ui, "Base", base, &BaseSatin::TODAS, BaseSatin::nombre);
                 ui.label("");
-                ui.checkbox(base, "Base (pespunte central)");
+                ui.checkbox(ahusado, "Puntas finas")
+                    .on_hover_text("Empieza y termina en punta: tallos, hojas, caligrafía");
                 ui.end_row();
             }
             Puntada::Relleno {
@@ -759,29 +857,68 @@ fn puntada_params(ui: &mut egui::Ui, puntada: &mut Puntada) {
                 largo,
                 base,
                 compensacion,
+                patron,
+                separacion_final,
             } => {
-                ui.label("Ángulo");
-                ui.add(
-                    egui::DragValue::new(angulo)
-                        .range(-180.0..=180.0)
-                        .speed(1.0)
-                        .suffix("°"),
+                fila(ui, "Ángulo", "Dirección de las filas", grados(angulo));
+                fila(
+                    ui,
+                    "Separación",
+                    "Distancia entre filas: menos = más tupido",
+                    mm(separacion, 0.2..=3.0),
                 );
+                fila(ui, "Largo", LARGO, mm(largo, 1.0..=7.0));
+                fila(
+                    ui,
+                    "Compensación",
+                    "Alarga las filas para compensar el tirón del hilo",
+                    mm(compensacion, -1.0..=1.0),
+                );
+                opciones(ui, "Patrón", patron, &Patron::TODOS, Patron::nombre);
+                ui.label("");
+                let mut degrade = separacion_final.is_some();
+                if ui
+                    .checkbox(&mut degrade, "Degradé")
+                    .on_hover_text("Las filas se van separando hasta la última")
+                    .changed()
+                {
+                    *separacion_final = degrade.then_some((*separacion * 4.0).min(3.0));
+                }
                 ui.end_row();
-                ui.label("Separación")
-                    .on_hover_text("Distancia entre filas");
-                ui.add(mm(separacion, 0.2..=3.0));
-                ui.end_row();
-                ui.label("Largo");
-                ui.add(mm(largo, 1.0..=7.0));
-                ui.end_row();
-                ui.label("Compensación")
-                    .on_hover_text("Alarga las filas para compensar el tirón del hilo");
-                ui.add(mm(compensacion, -1.0..=1.0));
-                ui.end_row();
+                if let Some(fin) = separacion_final {
+                    fila(
+                        ui,
+                        "Separación final",
+                        "Distancia entre las últimas filas",
+                        mm(fin, 0.2..=5.0),
+                    );
+                }
                 ui.label("");
                 ui.checkbox(base, "Base (relleno ralo cruzado)");
                 ui.end_row();
+            }
+            Puntada::Concentrico { separacion, largo } => {
+                fila(
+                    ui,
+                    "Separación",
+                    "Distancia entre filas",
+                    mm(separacion, 0.2..=3.0),
+                );
+                fila(ui, "Largo", LARGO, mm(largo, 1.0..=6.0));
+            }
+            Puntada::Cuadrille {
+                angulo,
+                separacion,
+                largo,
+            } => {
+                fila(ui, "Ángulo", "Dirección de las líneas", grados(angulo));
+                fila(
+                    ui,
+                    "Separación",
+                    "Tamaño de los cuadros",
+                    mm(separacion, 1.0..=10.0),
+                );
+                fila(ui, "Largo", LARGO, mm(largo, 1.0..=6.0));
             }
         });
 }

@@ -8,11 +8,38 @@
 use kurbo::{Affine, Point};
 
 use crate::geom::subdividir;
+use crate::proyecto::Patron;
 
 use super::Tramo;
 
-/// Desfase de las puntadas en filas sucesivas, en fracciones del largo (patrón de ladrillo).
-const DESFASES: [f64; 4] = [0.0, 0.5, 0.25, 0.75];
+/// Desfase de las puntadas en filas sucesivas, en fracciones del largo.
+fn desfases(patron: Patron) -> &'static [f64] {
+    match patron {
+        Patron::Ladrillo => &[0.0, 0.5, 0.25, 0.75],
+        Patron::Diagonal => &[0.0, 0.25, 0.5, 0.75],
+        Patron::Irregular => &[
+            0.0,
+            3.0 / 7.0,
+            6.0 / 7.0,
+            2.0 / 7.0,
+            5.0 / 7.0,
+            1.0 / 7.0,
+            4.0 / 7.0,
+        ],
+    }
+}
+
+/// Parámetros de un relleno tatami (mm y grados).
+#[derive(Debug, Clone, Copy)]
+pub struct Tatami {
+    pub angulo: f64,
+    pub separacion: f64,
+    /// Degradé: separación de la última fila (la primera usa `separacion`).
+    pub separacion_final: Option<f64>,
+    pub largo: f64,
+    pub compensacion: f64,
+    pub patron: Patron,
+}
 /// Una puntada interior no queda más cerca que esto (fracción del largo) del borde de la fila.
 const MARGEN: f64 = 0.3;
 /// Segmentos más cortos que esto (mm) no se cosen.
@@ -20,14 +47,15 @@ const MINIMO: f64 = 0.2;
 
 /// Rellena los anillos (cerrados, sin repetir el primer punto). `desde` es donde está la
 /// aguja, para empezar por la sección más cercana.
-pub fn relleno(
-    anillos: &[Vec<Point>],
-    angulo: f64,
-    separacion: f64,
-    largo: f64,
-    compensacion: f64,
-    desde: Point,
-) -> Vec<Tramo> {
+pub fn relleno(anillos: &[Vec<Point>], t: Tatami, desde: Point) -> Vec<Tramo> {
+    let Tatami {
+        angulo,
+        separacion,
+        separacion_final,
+        largo,
+        compensacion,
+        patron,
+    } = t;
     let giro = Affine::rotate(-angulo.to_radians());
     let anillos: Vec<Vec<Point>> = anillos
         .iter()
@@ -42,11 +70,11 @@ pub fn relleno(
         return vec![];
     }
 
-    // Filas centradas en la altura de la forma.
-    let n = ((ymax - ymin) / separacion).floor().max(1.0) as usize;
-    let y0 = (ymin + ymax) / 2.0 - (n - 1) as f64 * separacion / 2.0;
-    let filas: Vec<Vec<(f64, f64)>> = (0..n)
-        .map(|k| segmentos(&anillos, y0 + k as f64 * separacion, compensacion))
+    let ys = filas_y(ymin, ymax, separacion, separacion_final);
+    let desfases = desfases(patron);
+    let filas: Vec<Vec<(f64, f64)>> = ys
+        .iter()
+        .map(|&y| segmentos(&anillos, y, compensacion))
         .collect();
 
     let secciones = secciones(&filas);
@@ -70,7 +98,7 @@ pub fn relleno(
                     let s = pendientes[i];
                     let &(k, x0, x1) = if abajo { s.last() } else { s.first() }.unwrap();
                     let x = if rev { x1 } else { x0 };
-                    pos.distance(Point::new(x, y0 + k as f64 * separacion))
+                    pos.distance(Point::new(x, ys[k]))
                 };
                 d(a).total_cmp(&d(b))
             })
@@ -88,7 +116,8 @@ pub fn relleno(
             } else {
                 (x0, x1)
             };
-            fila(y0 + k as f64 * separacion, a, b, k, largo, &mut tramo);
+            let fase = desfases[k % desfases.len()];
+            fila(ys[k], a, b, fase, largo, &mut tramo);
         }
         pos = *tramo.last().unwrap();
         // Las uniones entre filas pueden ser largas donde el borde es casi horizontal.
@@ -100,6 +129,32 @@ pub fn relleno(
         );
     }
     out
+}
+
+/// Alturas de las filas. Con separación fija quedan centradas en la forma; con degradé la
+/// separación crece (o baja) de a poco desde la primera fila.
+fn filas_y(ymin: f64, ymax: f64, separacion: f64, separacion_final: Option<f64>) -> Vec<f64> {
+    let alto = ymax - ymin;
+    match separacion_final {
+        Some(fin) if fin > 0.0 && (fin - separacion).abs() > 1e-9 => {
+            let paso =
+                |y: f64| separacion + (fin - separacion) * ((y - ymin) / alto).clamp(0.0, 1.0);
+            let mut ys = vec![ymin + separacion / 2.0];
+            loop {
+                let y = *ys.last().unwrap();
+                let siguiente = y + paso(y);
+                if siguiente > ymax - paso(siguiente) / 4.0 {
+                    break ys;
+                }
+                ys.push(siguiente);
+            }
+        }
+        _ => {
+            let n = (alto / separacion).floor().max(1.0) as usize;
+            let y0 = (ymin + ymax) / 2.0 - (n - 1) as f64 * separacion / 2.0;
+            (0..n).map(|k| y0 + k as f64 * separacion).collect()
+        }
+    }
 }
 
 /// Cortes de la línea horizontal `y` con los anillos, como pares (entrada, salida).
@@ -148,9 +203,10 @@ fn secciones(filas: &[Vec<(f64, f64)>]) -> Vec<Vec<(usize, f64, f64)>> {
 }
 
 /// Agrega las puntadas de una fila de `a` a `b`, alineadas a una grilla desfasada por fila.
-fn fila(y: f64, a: f64, b: f64, k: usize, largo: f64, out: &mut Vec<Point>) {
+/// `fase` es el desfase de la grilla en fracciones del largo.
+fn fila(y: f64, a: f64, b: f64, fase: f64, largo: f64, out: &mut Vec<Point>) {
     out.push(Point::new(a, y));
-    let fase = DESFASES[k % DESFASES.len()] * largo;
+    let fase = fase * largo;
     let (lo, hi) = (a.min(b), a.max(b));
     let primero = ((lo - fase) / largo).ceil() as i64;
     let ultimo = ((hi - fase) / largo).floor() as i64;
@@ -169,6 +225,17 @@ fn fila(y: f64, a: f64, b: f64, k: usize, largo: f64, out: &mut Vec<Point>) {
 mod tests {
     use super::*;
 
+    fn tatami(angulo: f64, separacion: f64, largo: f64) -> Tatami {
+        Tatami {
+            angulo,
+            separacion,
+            separacion_final: None,
+            largo,
+            compensacion: 0.0,
+            patron: Patron::Ladrillo,
+        }
+    }
+
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Point> {
         [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
             .map(Point::from)
@@ -179,10 +246,7 @@ mod tests {
     fn convex_shape_is_one_serpentine() {
         let t = relleno(
             &[rect(0.0, 0.0, 20.0, 10.0)],
-            0.0,
-            0.5,
-            3.0,
-            0.0,
+            tatami(0.0, 0.5, 3.0),
             Point::ZERO,
         );
         assert_eq!(t.len(), 1);
@@ -200,7 +264,7 @@ mod tests {
     #[test]
     fn hole_stays_empty() {
         let anillos = [rect(0.0, 0.0, 30.0, 30.0), rect(10.0, 10.0, 20.0, 20.0)];
-        let tramos = relleno(&anillos, 30.0, 0.4, 3.0, 0.0, Point::ZERO);
+        let tramos = relleno(&anillos, tatami(30.0, 0.4, 3.0), Point::ZERO);
         assert!(tramos.len() >= 2, "el agujero obliga a separar secciones");
         for t in &tramos {
             for w in t.windows(2) {
@@ -222,10 +286,7 @@ mod tests {
     fn rotated_rows_follow_the_angle() {
         let t = relleno(
             &[rect(-10.0, -10.0, 10.0, 10.0)],
-            90.0,
-            1.0,
-            3.0,
-            0.0,
+            tatami(90.0, 1.0, 3.0),
             Point::ZERO,
         );
         // A 90° las filas son verticales: la mayoría de las puntadas no cambia x.
@@ -234,5 +295,33 @@ mod tests {
             .filter(|w| (w[0].x - w[1].x).abs() < 1e-9)
             .count();
         assert!(verticales * 10 > t[0].len() * 8);
+    }
+
+    #[test]
+    fn gradient_rows_spread_apart() {
+        let ys = filas_y(0.0, 20.0, 0.4, Some(2.0));
+        let pasos: Vec<f64> = ys.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(pasos.windows(2).all(|w| w[1] >= w[0] - 1e-9), "crecen");
+        assert!(pasos[0] < 0.45 && *pasos.last().unwrap() > 1.7);
+        assert!(*ys.last().unwrap() <= 20.0);
+        // Sin degradé: filas centradas y parejas.
+        let ys = filas_y(0.0, 10.0, 0.5, None);
+        assert_eq!(ys.len(), 20);
+    }
+
+    #[test]
+    fn every_pattern_fills_the_same_rows() {
+        for patron in Patron::TODOS {
+            let t = relleno(
+                &[rect(0.0, 0.0, 20.0, 10.0)],
+                Tatami {
+                    patron,
+                    ..tatami(0.0, 0.5, 3.0)
+                },
+                Point::ZERO,
+            );
+            assert_eq!(t.len(), 1);
+            assert!(t[0].windows(2).all(|w| w[0].distance(w[1]) <= 3.0 + 1e-9));
+        }
     }
 }

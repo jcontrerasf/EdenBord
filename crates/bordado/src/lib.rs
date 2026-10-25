@@ -16,13 +16,14 @@ use std::ops::Range;
 use kurbo::{Affine, BezPath, Point};
 
 pub use proyecto::{
-    EXTENSION, FORMATO, FORMATO_ANTIGUO, FORMATO_PORTAPAPELES, Fondo, Forma, OPACIDAD_GUIA, Objeto,
-    PRESETS, Proyecto, ProyectoError, Puntada, VERSION, copiar_objetos, pegar_objetos,
+    BaseSatin, EXTENSION, FORMATO, FORMATO_ANTIGUO, FORMATO_PORTAPAPELES, Fondo, Forma, Grupo,
+    Lado, Motivo, OPACIDAD_GUIA, Objeto, PRESETS, Patron, Preset, Proyecto, ProyectoError, Puntada,
+    VERSION, copiar_objetos, pegar_objetos, preset_por_nombre,
 };
 
-use geom::{Polilinea, polilineas};
+use geom::polilineas;
 use jef::{Hoop, Jef, Stitch, StitchKind};
-use puntadas::Tramo;
+use puntadas::{Tatami, Tramo};
 
 /// Parámetros de la base del relleno: ralo, cruzado y metido hacia adentro.
 const BASE_SEPARACION: f64 = 2.0;
@@ -56,47 +57,99 @@ impl Objeto {
     /// Tramos de puntadas en mm. `desde` es donde está la aguja.
     pub fn tramos(&self, desde: Point) -> Result<Vec<Tramo>, String> {
         let lineas = polilineas(&self.trazado()?);
+        // Como en SVG, un trazado abierto se rellena como si estuviera cerrado.
+        let anillos = || -> Vec<Vec<Point>> { lineas.iter().map(|pl| pl.puntos.clone()).collect() };
         Ok(match self.puntada {
             Puntada::Ninguna => vec![],
-            Puntada::Corrido { largo, triple } => puntadas::corrido(&lineas, largo, triple),
+            Puntada::Corrido { largo, pasadas } => puntadas::corrido(&lineas, largo, pasadas),
+            Puntada::Manual => puntadas::manual(&lineas),
+            Puntada::PuntoAtras { largo } => puntadas::punto_atras(&lineas, largo),
+            Puntada::Tallo { largo, ancho } => puntadas::tallo(&lineas, largo, ancho),
+            Puntada::Feston {
+                ancho,
+                separacion,
+                lado,
+            } => puntadas::feston(&lineas, ancho, separacion, lado),
+            Puntada::Motivo {
+                motivo,
+                largo,
+                ancho,
+            } => puntadas::motivo(&lineas, motivo, largo, ancho),
             Puntada::Satin {
                 ancho,
                 densidad,
                 base,
-            } => puntadas::satin(&lineas, ancho, densidad, base),
+                compensacion,
+                ahusado,
+            } => puntadas::satin(&lineas, ancho, densidad, base, compensacion, ahusado),
             Puntada::Relleno {
                 angulo,
                 separacion,
                 largo,
                 base,
                 compensacion,
+                patron,
+                separacion_final,
             } => {
-                // Como en SVG, un trazado abierto se rellena como si estuviera cerrado.
-                let anillos: Vec<_> = lineas
-                    .into_iter()
-                    .map(|Polilinea { puntos, .. }| puntos)
-                    .collect();
+                let anillos = anillos();
                 let mut out = Vec::new();
                 let mut desde = desde;
                 if base {
                     out = puntadas::relleno(
                         &anillos,
-                        angulo + 90.0,
-                        BASE_SEPARACION,
-                        BASE_LARGO,
-                        BASE_MARGEN,
+                        Tatami {
+                            angulo: angulo + 90.0,
+                            separacion: BASE_SEPARACION,
+                            separacion_final: None,
+                            largo: BASE_LARGO,
+                            compensacion: BASE_MARGEN,
+                            patron: Patron::Ladrillo,
+                        },
                         desde,
                     );
                     desde = out.last().and_then(|t| t.last().copied()).unwrap_or(desde);
                 }
                 out.extend(puntadas::relleno(
                     &anillos,
-                    angulo,
-                    separacion,
-                    largo,
-                    compensacion,
+                    Tatami {
+                        angulo,
+                        separacion,
+                        separacion_final,
+                        largo,
+                        compensacion,
+                        patron,
+                    },
                     desde,
                 ));
+                out
+            }
+            Puntada::Concentrico { separacion, largo } => {
+                puntadas::concentrico(&anillos(), separacion, largo, desde)
+            }
+            Puntada::Cuadrille {
+                angulo,
+                separacion,
+                largo,
+            } => {
+                let anillos = anillos();
+                let mut out = Vec::new();
+                let mut desde = desde;
+                for a in [angulo, angulo + 90.0] {
+                    let t = Tatami {
+                        angulo: a,
+                        separacion,
+                        separacion_final: None,
+                        largo,
+                        compensacion: 0.0,
+                        patron: Patron::Ladrillo,
+                    };
+                    let tramos = puntadas::relleno(&anillos, t, desde);
+                    desde = tramos
+                        .last()
+                        .and_then(|t| t.last().copied())
+                        .unwrap_or(desde);
+                    out.extend(tramos);
+                }
                 out
             }
         })
@@ -210,10 +263,15 @@ mod tests {
     fn generated_design_roundtrips_and_changes_color_only_when_needed() {
         let mut p = Proyecto::default();
         let cuadrado = "M-20,-20 L20,-20 L20,20 L-20,20 Z M-5,-5 L5,-5 L5,5 L-5,5 Z";
-        p.objetos.push(objeto(cuadrado, 10, PRESETS[5].1.clone()));
-        p.objetos.push(objeto(cuadrado, 10, PRESETS[3].1.clone()));
         p.objetos
-            .push(objeto("M30,0 L40,0", 1, PRESETS[2].1.clone()));
+            .push(objeto(cuadrado, 10, preset_por_nombre("Relleno 45°")));
+        p.objetos
+            .push(objeto(cuadrado, 10, preset_por_nombre("Satín 2 mm")));
+        p.objetos.push(objeto(
+            "M30,0 L40,0",
+            1,
+            preset_por_nombre("Pespunte triple"),
+        ));
         p.objetos.push(objeto("M0,0 L1,1", 5, Puntada::Ninguna));
         let g = p.generar();
         assert!(g.avisos.is_empty());
@@ -237,6 +295,37 @@ mod tests {
     }
 
     #[test]
+    fn every_preset_generates_on_zones_and_lines() {
+        let zona = "M-15,-10 C-5,-20 5,-20 15,-10 L15,10 L-15,10 Z M-3,-3 L3,-3 L3,3 L-3,3 Z";
+        let linea = "M-20,15 C-10,0 10,30 20,15";
+        for preset in PRESETS {
+            let mut p = Proyecto::default();
+            p.objetos.push(objeto(zona, 2, preset.puntada.clone()));
+            let mut l = objeto(linea, 3, preset.puntada.clone());
+            l.forma = Forma::Linea {
+                d: BezPath::from_svg(linea).unwrap(),
+            };
+            p.objetos.push(l);
+            let g = p.generar();
+            assert!(g.avisos.is_empty(), "{}", preset.nombre);
+            let normales = g.jef.count(StitchKind::Normal);
+            match preset.grupo {
+                Grupo::Guia => assert_eq!(normales, 0),
+                _ => assert!(normales > 20, "{}: {normales}", preset.nombre),
+            }
+            // Ninguna puntada más larga que lo que la máquina cose bien (12 mm).
+            for w in g.jef.stitches.windows(2) {
+                if w[1].kind == StitchKind::Normal {
+                    let d = f64::from((w[1].x - w[0].x).pow(2) + (w[1].y - w[0].y).pow(2)).sqrt();
+                    assert!(d <= 120.0, "{}: {d}", preset.nombre);
+                }
+            }
+            let bytes = jef::write(&g.jef);
+            assert_eq!(jef::write(&jef::read(&bytes).unwrap()), bytes);
+        }
+    }
+
+    #[test]
     fn hidden_guides_and_errors_produce_valid_empty_design() {
         let mut p = Proyecto::default();
         p.objetos.push(Objeto {
@@ -250,7 +339,7 @@ mod tests {
                 espaciado: 0.0,
                 afin: Affine::IDENTITY.as_coeffs(),
             },
-            puntada: PRESETS[5].1.clone(),
+            puntada: preset_por_nombre("Relleno 45°"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
         });

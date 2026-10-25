@@ -77,6 +77,14 @@ pub const GUIA: &str = "\u{E602}"; // circle-dashed
 pub const CORRIDO: &str = "\u{E6D4}"; // line-segments
 pub const SATIN: &str = "\u{EA9C}"; // wave-sawtooth
 pub const RELLENO: &str = "\u{E392}"; // paint-bucket
+pub const MANUAL: &str = "\u{E29A}"; // hand-pointing
+pub const PUNTO_ATRAS: &str = "\u{E2E6}"; // link-simple
+pub const TALLO: &str = "\u{EBAE}"; // plant
+pub const FESTON: &str = "\u{E9C0}"; // feather
+pub const MOTIVO: &str = "\u{EA9A}"; // wave-sine
+pub const DEGRADE: &str = "\u{EB42}"; // gradient
+pub const CONCENTRICO: &str = "\u{E9FA}"; // spiral
+pub const CUADRILLE: &str = "\u{E2A2}"; // hash
 
 // Simulación.
 pub const REPRODUCIR: &str = "\u{E3D0}"; // play

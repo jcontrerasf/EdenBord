@@ -146,6 +146,62 @@ pub fn subdividir(puntos: &[Point], max: f64) -> Vec<Point> {
     out
 }
 
+/// Un recorrido medido por largo de arco: sirve para poner puntadas a distancias dadas.
+pub struct Arco {
+    puntos: Vec<Point>,
+    /// Largo acumulado hasta cada punto.
+    acumulado: Vec<f64>,
+}
+
+impl Arco {
+    pub fn new(puntos: &[Point]) -> Self {
+        let mut acumulado = Vec::with_capacity(puntos.len());
+        let mut total = 0.0;
+        for (i, p) in puntos.iter().enumerate() {
+            if i > 0 {
+                total += puntos[i - 1].distance(*p);
+            }
+            acumulado.push(total);
+        }
+        Arco {
+            puntos: puntos.to_vec(),
+            acumulado,
+        }
+    }
+
+    pub fn largo(&self) -> f64 {
+        self.acumulado.last().copied().unwrap_or(0.0)
+    }
+
+    /// Punto a distancia `s` del inicio (limitada al recorrido) y la tangente unitaria ahí.
+    pub fn en(&self, s: f64) -> (Point, Vec2) {
+        let n = self.puntos.len();
+        if n < 2 {
+            return (
+                self.puntos.first().copied().unwrap_or(Point::ZERO),
+                Vec2::ZERO,
+            );
+        }
+        let s = s.clamp(0.0, self.largo());
+        // Primer segmento cuyo final llega a `s`.
+        let i = self.acumulado[1..].partition_point(|&a| a < s).min(n - 2);
+        let (a, b) = (self.puntos[i], self.puntos[i + 1]);
+        let l = self.acumulado[i + 1] - self.acumulado[i];
+        let t = if l > 0.0 {
+            (s - self.acumulado[i]) / l
+        } else {
+            0.0
+        };
+        (a.lerp(b, t), unitario(b - a))
+    }
+}
+
+/// Normal unitaria a la izquierda de la tangente en pantalla (y hacia abajo): a la derecha
+/// del sentido de avance queda `-normal`.
+pub fn normal(t: Vec2) -> Vec2 {
+    Vec2::new(t.y, -t.x)
+}
+
 /// Vector unitario, o cero si es nulo.
 pub fn unitario(v: Vec2) -> Vec2 {
     let n = v.hypot();
@@ -173,6 +229,17 @@ mod tests {
         assert_eq!(partes.len(), 2, "el M suelto no cuenta");
         assert_eq!(partes[0].to_svg(), "M0,0 L10,0 L10,10 Z");
         assert_eq!(partes[1].to_svg(), "M2,2 L3,2 L3,3 Z");
+    }
+
+    #[test]
+    fn arc_length_lookup() {
+        let arco = Arco::new(&[(0., 0.), (10., 0.), (10., 5.)].map(Point::from));
+        assert_eq!(arco.largo(), 15.0);
+        assert_eq!(arco.en(4.0), (Point::new(4.0, 0.0), Vec2::new(1.0, 0.0)));
+        assert_eq!(arco.en(12.0), (Point::new(10.0, 2.0), Vec2::new(0.0, 1.0)));
+        assert_eq!(arco.en(99.0).0, Point::new(10.0, 5.0));
+        // Avanzando hacia +x en pantalla, la izquierda es -y (arriba).
+        assert_eq!(normal(Vec2::new(1.0, 0.0)), Vec2::new(0.0, -1.0));
     }
 
     #[test]

@@ -677,7 +677,6 @@ pub fn trapecios(pls: &[Polilinea]) -> Vec<[Point; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bordado::PRESETS;
     use kurbo::BezPath;
 
     fn doc() -> ProyectoDoc {
@@ -696,7 +695,7 @@ mod tests {
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.
         p.objetos.push(obj(
             "M0,0 L30,0 L30,30 L0,30 Z M10,10 L20,10 L20,20 L10,20 Z",
-            PRESETS[5].1.clone(),
+            bordado::preset_por_nombre("Relleno 45°"),
         ));
         p.objetos
             .push(obj("M12,12 L14,12 L14,14 L12,14 Z", Puntada::Ninguna));

@@ -99,10 +99,20 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
   `texto {texto, fuente (ruta), alto (mayúsculas, mm), espaciado, afin [6]}`. `d` es el `d` de
   SVG (kurbo `BezPath`), guardado con 3 decimales. Transformar un texto compone su `afin`.
-- `Puntada` (`tipo`): `ninguna` (guía, no se borda) | `corrido {largo, triple}` |
-  `satin {ancho, densidad, base}` | `relleno {angulo, separacion, largo, base, compensacion}`.
-  `PRESETS` = la "paleta" de tipos. Relleno solo en zonas; corrido/satín sobre cualquier trazado
-  (en zonas, sobre el borde).
+- `Puntada` (`tipo`, snake_case): `ninguna` (guía) | líneas (siguen el trazado; en zonas, el
+  borde): `corrido {largo, pasadas}` (1/3/5… = simple/triple/bean), `manual`,
+  `punto_atras {largo}`, `tallo {largo, ancho}`, `feston {ancho, separacion, lado}`,
+  `motivo {motivo, largo, ancho}` (onda, sierra, almenas, rombos, festones, cruces;
+  `puntadas/motivo.rs`), `satin {ancho, densidad, base: ninguna|central|contorno|zigzag,
+  compensacion, ahusado}` | solo zonas (`solo_zonas()`): `relleno {angulo, separacion, largo,
+  base, compensacion, patron, separacion_final?}` (degradé si hay `separacion_final`),
+  `concentrico {separacion, largo}` (anillos con `i_overlay` outline), `cuadrille`.
+  `PRESETS` = la paleta: `Preset {nombre, descripcion, grupo: Guia|Linea|Relleno, puntada}`;
+  `preset_por_nombre`.
+- Formato **versión 2**. `migrar()` pasa el JSON v1 (`corrido.triple`, `satin.base` bool) a v2
+  mirando la forma de los campos (idempotente); se usa al leer proyectos y al pegar.
+- Helpers de `geom`: `Arco` (punto y tangente por largo de arco), `normal` (izquierda del
+  avance, con y hacia abajo).
 - `Proyecto::generar()` → `Generado { jef, objeto_de_bloque, avisos }`: cada objeto da tramos
   (mm); cada tramo lleva remates (`puntadas/remate.rs`) y se une con un salto; objetos seguidos
   del mismo color no cambian de hilo. Termina en `Jef::new` (cabecera estándar, fecha actual en
@@ -123,7 +133,7 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   con regla par-impar; aplana las curvas (`geom::TOLERANCIA`), el resultado es solo rectas.
   Varias zonas = `operar_varias` (de a pares, en orden).
 - `Puntada::copiar_cambios(antes, despues)`: copia solo los parámetros que cambiaron (edición
-  de varios objetos sin pisar lo distinto de cada uno).
+  de varios objetos sin pisar lo distinto de cada uno). Genérico: compara los campos del JSON.
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
 ## App (`crates/edenbord/src`)

@@ -7,7 +7,7 @@
 
 use std::fmt::Write;
 
-use bordado::{PRESETS, Proyecto, Puntada};
+use bordado::{Proyecto, Puntada, preset_por_nombre};
 use jef::StitchKind;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,13 +17,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     };
     let proyecto = if entrada.to_lowercase().ends_with(".svg") {
-        let preset = |n: &str| PRESETS.iter().find(|(p, _)| *p == n).unwrap().1.clone();
         let mut objetos = bordado::svg::importar_archivo(entrada)?;
         for o in &mut objetos {
             o.puntada = if o.es_zona() {
-                preset("Relleno 45°")
+                preset_por_nombre("Relleno 45°")
             } else {
-                preset("Pespunte triple")
+                preset_por_nombre("Pespunte triple")
             };
         }
         Proyecto {

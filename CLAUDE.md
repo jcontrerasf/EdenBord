@@ -204,6 +204,13 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `sync()`).
 - Lista de objetos y de colores JEF: arrastrar una fila cambia el orden de bordado
   (`lista.rs`); clic derecho = menú (duplicar/borrar, subir/bajar). Ojo y candado en la fila.
+- Paleta de puntadas (`paleta.rs`, en Propiedades): una ficha por `PRESETS` con una muestra
+  cosida de verdad (el preset generado sobre una curva o zona chica, en caché con `OnceLock`)
+  dibujada con `realista`, agrupadas en Líneas/Rellenos; marca la que coincide con la puntada
+  actual; los rellenos se deshabilitan si la selección no tiene zonas.
+- Manija del ángulo del relleno (`Pick::Angulo`, `Gesto::Angulo`): con un solo objeto con
+  `Puntada::angulo()`, una línea desde el centro; arrastrarla cambia el ángulo en vivo
+  (`edit_grouped`), Shift = de a 15°, Esc deshace. `gestos::angulo_filas` (en (−90, 90]).
 - Con varios objetos seleccionados, el panel edita los parámetros del primero y los aplica con
   `copiar_cambios` a los del mismo tipo; el selector de color pinta toda la selección si el
   objeto elegido es parte de ella.

@@ -3,15 +3,15 @@
 use std::path::PathBuf;
 
 use bordado::{
-    BaseSatin, Fondo, Forma, Lado, Motivo, Objeto, PRESETS, Patron, Proyecto, Puntada,
-    preset_por_nombre,
+    BaseSatin, Fondo, Forma, Lado, Motivo, Objeto, Patron, Proyecto, Puntada, preset_por_nombre,
 };
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
 use kurbo::{Affine, Point, Shape};
 
+use crate::realista::Texturas;
 use crate::tema::AVISO as WARNING;
-use crate::{Editor, file_name, iconos, lista, tema, write_verified};
+use crate::{Editor, file_name, iconos, lista, paleta, tema, write_verified};
 
 impl Editor {
     /// Panel derecho de un proyecto: objetos arriba, propiedades abajo.
@@ -56,7 +56,8 @@ impl Editor {
             .show(ui, |ui| {
                 ui.add_space(6.0);
                 let doc = self.proyecto.as_mut().unwrap();
-                if let Some(path) = properties_section(ui, doc, &mut self.picking_color) {
+                let texturas = self.texturas.get_or_insert_with(|| Texturas::new(ui.ctx()));
+                if let Some(path) = properties_section(ui, doc, texturas, &mut self.picking_color) {
                     self.change_font(path);
                 }
                 ui.separator();
@@ -511,6 +512,7 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
 fn properties_section(
     ui: &mut egui::Ui,
     doc: &mut crate::proyecto::ProyectoDoc,
+    texturas: &Texturas,
     pick_color: &mut Option<usize>,
 ) -> Option<Option<PathBuf>> {
     let sel = doc.selection();
@@ -527,26 +529,25 @@ fn properties_section(
         },
     );
 
-    // Tipo de puntada: se aplica a toda la selección (el relleno solo a zonas).
+    // Tipo de puntada: se aplica a toda la selección (los rellenos solo a zonas).
     let first = &doc.proyecto.objetos[sel[0]];
-    let mut chosen = None;
+    let [r, g, b] = jef::palette::thread(first.color).map_or([128; 3], |t| t.rgb);
+    let zonas = sel.iter().any(|&i| doc.proyecto.objetos[i].es_zona());
     ui.horizontal(|ui| {
         ui.label("Puntada");
-        egui::ComboBox::from_id_salt("preset")
-            .selected_text(first.puntada.nombre())
-            .show_ui(ui, |ui| {
-                for p in PRESETS {
-                    let texto = format!("{} {}", icono_puntada(&p.puntada), p.nombre);
-                    if ui
-                        .selectable_label(false, texto)
-                        .on_hover_text(p.descripcion)
-                        .clicked()
-                    {
-                        chosen = Some(p.puntada.clone());
-                    }
-                }
-            });
+        ui.strong(format!(
+            "{} {}",
+            icono_puntada(&first.puntada),
+            first.puntada.nombre()
+        ));
     });
+    let chosen = paleta::paleta(
+        ui,
+        texturas,
+        &first.puntada,
+        Color32::from_rgb(r, g, b),
+        zonas,
+    );
     if let Some(p) = chosen {
         doc.edit(|proj| {
             for &i in &sel {

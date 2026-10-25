@@ -42,6 +42,15 @@ pub enum Gesto {
     },
     /// Selección con un rectángulo de `a` a `b` (mm). `sumar`: agregar a la selección.
     Caja { a: Point, b: Point, sumar: bool },
+    /// Dirección de las filas del relleno del objeto `obj`, girando alrededor de `centro`
+    /// (mm). El ángulo se aplica en vivo (edición agrupada), `angulo` es el actual.
+    Angulo {
+        obj: usize,
+        centro: Point,
+        angulo: f64,
+        /// El ángulo al empezar: si cambió, cancelar deshace la edición.
+        inicial: f64,
+    },
 }
 
 /// Modificadores que cambian el gesto.
@@ -73,8 +82,29 @@ impl Gesto {
                 }
             }
             Gesto::Caja { b, .. } => *b = hasta,
+            Gesto::Angulo { centro, angulo, .. } => {
+                *angulo = angulo_filas(*centro, hasta, mods.shift);
+            }
         }
     }
+}
+
+/// Ángulo de las filas (grados, en (−90, 90]: una fila no tiene sentido) que apunta de `centro`
+/// a `hacia`. Positivo = horario en pantalla, como `Puntada::Relleno::angulo`. Con `paso`, de
+/// a 15°.
+pub fn angulo_filas(centro: Point, hacia: Point, paso: bool) -> f64 {
+    let d = hacia - centro;
+    let mut a = d.y.atan2(d.x).to_degrees();
+    if paso {
+        a = (a / GIRO_PASO).round() * GIRO_PASO;
+    }
+    while a > 90.0 {
+        a -= 180.0;
+    }
+    while a <= -90.0 {
+        a += 180.0;
+    }
+    if a.abs() < 1e-9 { 0.0 } else { a }
 }
 
 /// Mueve de `desde` a `hasta`; con `recto`, solo en horizontal o vertical (el eje mayor).
@@ -294,5 +324,18 @@ mod tests {
         assert!(near(af * Point::new(20.0, 10.0), Point::new(40.0, 20.0)));
         assert!(contiene(r(), Rect::new(1.0, 1.0, 2.0, 2.0)));
         assert!(!contiene(r(), Rect::new(1.0, 1.0, 21.0, 2.0)));
+    }
+
+    #[test]
+    fn fill_angle_points_at_the_pointer() {
+        let c = Point::ZERO;
+        assert_eq!(angulo_filas(c, Point::new(10.0, 0.0), false), 0.0);
+        assert_eq!(angulo_filas(c, Point::new(-10.0, 0.0), false), 0.0);
+        // y hacia abajo: abajo a la derecha es horario (positivo).
+        assert!((angulo_filas(c, Point::new(10.0, 10.0), false) - 45.0).abs() < 1e-9);
+        assert!((angulo_filas(c, Point::new(-10.0, 10.0), false) + 45.0).abs() < 1e-9);
+        assert_eq!(angulo_filas(c, Point::new(0.0, 10.0), false), 90.0);
+        assert_eq!(angulo_filas(c, Point::new(0.0, -10.0), false), 90.0);
+        assert_eq!(angulo_filas(c, Point::new(10.0, 3.0), true), 15.0);
     }
 }

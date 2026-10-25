@@ -30,6 +30,9 @@ const MAX_SCALE: f32 = 6.0;
 const HANDLE_PX: f32 = 7.0;
 /// Altura en píxeles de la manija de giro sobre el marco.
 const ROTATE_PX: f32 = 20.0;
+/// Largo en píxeles de la manija del ángulo del relleno, desde el centro del objeto.
+const ANGLE_PX: f32 = 40.0;
+const ANGLE_COLOR: Color32 = Color32::from_rgb(0xd7, 0x26, 0x3d);
 
 /// Conversión entre coordenadas del diseño y de pantalla.
 #[derive(Clone, Copy)]
@@ -476,6 +479,9 @@ impl Editor {
         } else if let Some(r) = doc.selection_rect() {
             draw_selection_frame(painter, vista.rect(r).expand(FRAME_PX));
         }
+        if let Some((_, centro, punta)) = self.angle_handle(vista) {
+            draw_angle_handle(painter, vista.mm(centro), punta);
+        }
         draw_needle(painter, vista, jef, progress);
         if self.tool == Tool::Pen {
             self.draw_pen(painter, response, vista);
@@ -530,8 +536,36 @@ impl Editor {
         Some((vista.rect(r).expand(FRAME_PX), blanco == Blanco::Objetos))
     }
 
+    /// Manija del ángulo del relleno: con un solo objeto elegido (no bloqueado) cuya puntada
+    /// tiene ángulo. Devuelve el objeto, el centro (mm) y la punta de la manija en pantalla.
+    fn angle_handle(&self, vista: Vista) -> Option<(usize, kurbo::Point, Pos2)> {
+        if self.tool != Tool::Select
+            || matches!(
+                self.gesto,
+                Some(Gesto::Transformar { .. } | Gesto::Caja { .. })
+            )
+        {
+            return None;
+        }
+        let doc = self.proyecto.as_ref()?;
+        let [i] = doc.selection()[..] else {
+            return None;
+        };
+        let obj = &doc.proyecto.objetos[i];
+        let angulo = obj.puntada.angulo().filter(|_| !obj.bloqueado)?;
+        let centro = doc.selection_rect()?.center();
+        let a = angulo.to_radians() as f32;
+        let punta = vista.mm(centro) + Vec2::new(a.cos(), a.sin()) * ANGLE_PX;
+        Some((i, centro, punta))
+    }
+
     /// Qué hay bajo el puntero, en orden de prioridad.
     fn pick(&self, vista: Vista, pos: Pos2) -> Pick {
+        if let Some((i, _, punta)) = self.angle_handle(vista)
+            && punta.distance(pos) <= HANDLE_PX
+        {
+            return Pick::Angulo(i);
+        }
         if let Some((r, completo)) = self.handles_rect(vista)
             && let Some(tipo) = handles(r, completo)
                 .into_iter()
@@ -605,6 +639,7 @@ impl Editor {
         {
             let icon = match self.pick(vista, pos) {
                 Pick::Manija(t) => handle_cursor(t),
+                Pick::Angulo(_) => egui::CursorIcon::Grab,
                 Pick::Seleccion | Pick::Objeto(_) => egui::CursorIcon::Move,
                 Pick::Fondo if self.fondo_sel => egui::CursorIcon::Move,
                 _ => egui::CursorIcon::Default,
@@ -618,6 +653,21 @@ impl Editor {
         {
             let desde = vista.to_mm(o);
             let pick = self.pick(vista, o);
+            if let Pick::Angulo(obj) = pick
+                && let Some((_, centro, _)) = self.angle_handle(vista)
+            {
+                let angulo = self.proyecto.as_ref().unwrap().proyecto.objetos[obj]
+                    .puntada
+                    .angulo()
+                    .unwrap_or(0.0);
+                self.gesto = Some(Gesto::Angulo {
+                    obj,
+                    centro,
+                    angulo,
+                    inicial: angulo,
+                });
+                return;
+            }
             let doc = self.proyecto.as_mut().unwrap();
             match pick {
                 Pick::Objeto(i) => {
@@ -636,7 +686,7 @@ impl Editor {
             let tipo = match pick {
                 Pick::Manija(t) => Some(t),
                 Pick::Seleccion | Pick::Objeto(_) | Pick::Fondo => Some(Tipo::Mover),
-                Pick::Nada => None,
+                Pick::Nada | Pick::Angulo(_) => None,
             };
             self.gesto = match (tipo, self.target_rect()) {
                 (Some(tipo), Some((r0, blanco))) => Some(Gesto::Transformar {
@@ -657,6 +707,17 @@ impl Editor {
             && let (Some(g), Some(pos)) = (&mut self.gesto, response.interact_pointer_pos())
         {
             g.arrastrar(vista.to_mm(pos), mods);
+            // El ángulo se aplica en vivo: se ve el relleno nuevo mientras se arrastra.
+            if let Gesto::Angulo { obj, angulo, .. } = *g
+                && let Some(doc) = self.proyecto.as_mut()
+                && doc.proyecto.objetos[obj].puntada.angulo() != Some(angulo)
+            {
+                doc.edit_grouped(format!("angulo {obj}"), |p| {
+                    if let Some(a) = p.objetos[obj].puntada.angulo_mut() {
+                        *a = angulo;
+                    }
+                });
+            }
         }
         if response.drag_stopped() {
             self.finish_gesture();
@@ -666,7 +727,7 @@ impl Editor {
         if response.clicked_by(Primary)
             && let Some(pos) = response.interact_pointer_pos()
             && let pick = self.pick(vista, pos)
-            && !matches!(pick, Pick::Manija(_))
+            && !matches!(pick, Pick::Manija(_) | Pick::Angulo(_))
         {
             let doc = self.proyecto.as_mut().unwrap();
             let p = vista.to_mm(pos);
@@ -714,6 +775,8 @@ impl Editor {
                     });
                 }
             }
+            // Ya se aplicó mientras se arrastraba.
+            Gesto::Angulo { .. } => {}
             Gesto::Caja { a, b, sumar } => {
                 let dentro = doc.objects_in(kurbo::Rect::from_points(a, b));
                 if !sumar {
@@ -959,6 +1022,7 @@ impl Editor {
                 draw_box(painter, Rect::from_two_pos(vista.mm(a), vista.mm(b)));
                 return;
             }
+            Gesto::Angulo { angulo, .. } => format!("Filas a {angulo:.0}°"),
             Gesto::Transformar { tipo, r0, af, .. } => match tipo {
                 Tipo::Mover => {
                     let d = af.translation();
@@ -1017,6 +1081,8 @@ enum NodeHit {
 #[derive(Clone, Copy, PartialEq)]
 enum Pick {
     Manija(Tipo),
+    /// La manija del ángulo del relleno de un objeto.
+    Angulo(usize),
     /// Un objeto seleccionado o el interior del marco de la selección.
     Seleccion,
     Objeto(usize),
@@ -1054,6 +1120,17 @@ fn handle_cursor(t: Tipo) -> egui::CursorIcon {
         Tipo::Girar => C::Alias,
         Tipo::Mover => C::Move,
     }
+}
+
+/// Manija del ángulo del relleno: una línea por el centro en la dirección de las filas.
+fn draw_angle_handle(painter: &egui::Painter, centro: Pos2, punta: Pos2) {
+    let atras = centro - (punta - centro);
+    let halo = Stroke::new(3.5, Color32::from_white_alpha(200));
+    let linea = Stroke::new(1.5, ANGLE_COLOR);
+    painter.line_segment([atras, punta], halo);
+    painter.line_segment([atras, punta], linea);
+    painter.circle_filled(centro, 2.5, ANGLE_COLOR);
+    painter.circle(punta, 5.0, Color32::WHITE, Stroke::new(1.5, ANGLE_COLOR));
 }
 
 fn draw_box(painter: &egui::Painter, r: Rect) {

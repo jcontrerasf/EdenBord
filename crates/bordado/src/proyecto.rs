@@ -337,6 +337,21 @@ impl Puntada {
         )
     }
 
+    /// Ángulo de las filas, en los rellenos que lo tienen (se edita también en el lienzo).
+    pub fn angulo_mut(&mut self) -> Option<&mut f64> {
+        match self {
+            Puntada::Relleno { angulo, .. } | Puntada::Cuadrille { angulo, .. } => Some(angulo),
+            _ => None,
+        }
+    }
+
+    pub fn angulo(&self) -> Option<f64> {
+        match self {
+            Puntada::Relleno { angulo, .. } | Puntada::Cuadrille { angulo, .. } => Some(*angulo),
+            _ => None,
+        }
+    }
+
     /// El `tipo` del JSON: igual para dos puntadas de la misma clase con otros parámetros.
     pub fn tipo(&self) -> std::mem::Discriminant<Puntada> {
         std::mem::discriminant(self)

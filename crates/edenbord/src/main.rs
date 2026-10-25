@@ -13,6 +13,7 @@ mod gestos;
 mod iconos;
 mod lista;
 mod nodos;
+mod paleta;
 mod panel_proyecto;
 mod pluma;
 mod preferencias;
@@ -482,7 +483,15 @@ impl Editor {
             (false, false)
         } else if self.gesto.is_some() {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-                self.gesto = None;
+                // El ángulo del relleno se aplica en vivo: cancelar lo deshace.
+                if let Some(gestos::Gesto::Angulo {
+                    angulo, inicial, ..
+                }) = self.gesto.take()
+                    && angulo != inicial
+                    && let Some(doc) = &mut self.proyecto
+                {
+                    doc.undo();
+                }
             }
             (false, false)
         } else {

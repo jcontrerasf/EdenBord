@@ -213,7 +213,9 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   trapecios (`proyecto::trapecios`, en caché en `ProyectoDoc.relleno_guias`, recalculada en
   `sync()`).
 - Lista de objetos y de colores JEF: arrastrar una fila cambia el orden de bordado
-  (`lista.rs`); clic derecho = menú (duplicar/borrar, subir/bajar). Ojo y candado en la fila.
+  (`lista.rs`); clic derecho = menú (cambiar nombre, duplicar, borrar). Ojo y candado en la
+  fila. Doble clic en un objeto = renombrarlo ahí (estado en la memoria temporal de egui;
+  Enter o clic afuera guarda, Esc descarta, vacío no cambia).
 - Paleta de puntadas (`paleta.rs`, en Propiedades): una ficha por `PRESETS` con una muestra
   cosida de verdad (el preset generado sobre una curva o zona chica, en caché con `OnceLock`)
   dibujada con `realista`, agrupadas en Líneas/Rellenos; marca la que coincide con la puntada

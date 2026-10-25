@@ -16,6 +16,7 @@ pub const TEXTO: &str = "\u{E48A}"; // text-t
 pub const DESHACER: &str = "\u{E08A}"; // arrow-u-up-left
 pub const REHACER: &str = "\u{E08C}"; // arrow-u-up-right
 pub const BORRAR: &str = "\u{E4A6}"; // trash
+pub const RENOMBRAR: &str = "\u{E3AE}"; // pencil
 pub const DUPLICAR: &str = "\u{E1CA}"; // copy
 pub const INFO: &str = "\u{E2CE}"; // info
 pub const AVISO: &str = "\u{E4E0}"; // warning

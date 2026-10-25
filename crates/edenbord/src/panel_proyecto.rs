@@ -388,6 +388,11 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
     // (objeto, acción): 0 borrar, 1 duplicar, 2 ver/ocultar, 3 bloquear/desbloquear.
     let mut action: Option<(usize, u8)> = None;
     let mut gap = None;
+    // Nombre en edición (doble clic o «Cambiar nombre»): objeto y texto.
+    let id_nombre = ui.make_persistent_id("renombrar_objeto");
+    let mut renombrar: Option<(usize, String)> = ui.data(|d| d.get_temp(id_nombre));
+    // Al terminar de renombrar: `true` guarda, `false` descarta.
+    let mut terminar = None;
     let n = doc.proyecto.objetos.len();
     for i in 0..n {
         let obj = &doc.proyecto.objetos[i];
@@ -406,7 +411,8 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             Forma::Texto { .. } => "texto",
         };
         let hover = format!(
-            "{}. {forma} · {} · arrastrar para cambiar el orden de bordado · clic derecho: más",
+            "{}. {forma} · {} · doble clic: cambiar el nombre · arrastrar: cambiar el orden de \
+             bordado · clic derecho: más",
             i + 1,
             obj.puntada.nombre()
         );
@@ -423,7 +429,26 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
                     pick = Some(i);
                 }
                 ui.label(tema::icono(icon, false).color(tema::TEXTO_SUAVE));
-                ui.add(egui::Label::new(label).truncate().selectable(false));
+                match &mut renombrar {
+                    Some((j, texto)) if *j == i => {
+                        let campo = ui.add(
+                            egui::TextEdit::singleline(texto)
+                                .desired_width(ui.available_width() - 60.0),
+                        );
+                        if !campo.has_focus() && !campo.lost_focus() {
+                            campo.request_focus();
+                        }
+                        if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                            terminar = Some(false);
+                        } else if campo.lost_focus() {
+                            // Enter o clic afuera.
+                            terminar = Some(true);
+                        }
+                    }
+                    _ => {
+                        ui.add(egui::Label::new(label).truncate().selectable(false));
+                    }
+                }
             },
             |ui| {
                 let (ico, ayuda) = if bloqueado {
@@ -445,10 +470,21 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             },
         )
         .on_hover_text(hover);
-        if resp.clicked() {
+        if resp.double_clicked() {
+            // El primer clic pudo haberla quitado de la selección: queda elegida sola.
+            doc.seleccion.fill(false);
+            doc.seleccion[i] = true;
+            renombrar = Some((i, doc.proyecto.objetos[i].nombre.clone()));
+        } else if resp.clicked() {
             lista::clic(ui, &mut doc.seleccion, i);
         }
         resp.context_menu(|ui| {
+            if ui
+                .button(format!("{} Cambiar nombre", iconos::RENOMBRAR))
+                .clicked()
+            {
+                renombrar = Some((i, doc.proyecto.objetos[i].nombre.clone()));
+            }
             if ui
                 .button(format!("{} Duplicar", iconos::DUPLICAR))
                 .clicked()
@@ -464,6 +500,23 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
     if let Some((from, to)) = lista::soltar(ui, gap) {
         doc.move_object(from, to);
     }
+    if let Some(guardar) = terminar
+        && let Some((i, texto)) = renombrar.take()
+    {
+        let nombre = texto.trim();
+        if guardar && !nombre.is_empty() && i < n && doc.proyecto.objetos[i].nombre != nombre {
+            let nombre = nombre.to_string();
+            doc.edit(|p| p.objetos[i].nombre = nombre);
+        }
+    }
+    // Si el objeto ya no existe (se borró o se deshizo), deja de renombrar.
+    renombrar = renombrar.filter(|(i, _)| *i < doc.proyecto.objetos.len());
+    ui.data_mut(|d| match renombrar {
+        Some(r) => {
+            d.insert_temp(id_nombre, r);
+        }
+        None => d.remove::<(usize, String)>(id_nombre),
+    });
     match action {
         Some((i, 0)) => doc.remove(i),
         Some((i, 1)) => doc.duplicate(i),

@@ -25,6 +25,11 @@ impl Editor {
                         self.request_open(Some(path));
                     }
                 });
+                ui.menu_button(format!("{} Ejemplos", iconos::EJEMPLOS), |ui| {
+                    if let Some(i) = example_list(ui, 0.0) {
+                        self.request_example(i);
+                    }
+                });
                 ui.separator();
                 ui.horizontal(|ui| {
                     let zoom = ui.ctx().zoom_factor();
@@ -275,7 +280,8 @@ impl Editor {
     /// Sin nada abierto: logo y botones para empezar.
     pub(crate) fn welcome(&mut self, ui: &mut Ui) {
         ui.vertical_centered(|ui| {
-            let alto = 380.0 + 34.0 * self.recientes.len() as f32;
+            let filas = bordado::ejemplos::EJEMPLOS.len() + self.recientes.len();
+            let alto = 420.0 + 34.0 * filas as f32;
             ui.add_space(((ui.available_height() - alto) / 2.0).max(20.0));
             if let Some(logo) = &self.logo {
                 ui.add(egui::Image::new(logo).fit_to_exact_size(Vec2::splat(128.0)));
@@ -314,6 +320,11 @@ impl Editor {
                 )
                 .color(tema::TEXTO_SUAVE),
             );
+            ui.add_space(20.0);
+            tema::titulo(ui, "Ejemplos");
+            if let Some(i) = example_list(ui, ancho) {
+                self.request_example(i);
+            }
             if !self.recientes.is_empty() {
                 ui.add_space(20.0);
                 tema::titulo(ui, "Recientes");
@@ -358,4 +369,17 @@ impl Editor {
         }
         elegido
     }
+}
+
+/// Botones de los proyectos de ejemplo. Devuelve el elegido. `ancho` 0 = el natural.
+fn example_list(ui: &mut Ui, ancho: f32) -> Option<usize> {
+    let mut elegido = None;
+    for (i, e) in bordado::ejemplos::EJEMPLOS.iter().enumerate() {
+        let boton = egui::Button::new(format!("{}  {}", iconos::FLOR, e.nombre))
+            .min_size(Vec2::new(ancho, 30.0));
+        if ui.add(boton).on_hover_text(e.descripcion).clicked() {
+            elegido = Some(i);
+        }
+    }
+    elegido
 }

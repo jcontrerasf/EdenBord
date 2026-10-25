@@ -5,6 +5,7 @@
 //! a generar, cosa que un JEF no permite.
 
 pub mod booleanas;
+pub mod ejemplos;
 pub mod fuentes;
 pub mod geom;
 mod proyecto;

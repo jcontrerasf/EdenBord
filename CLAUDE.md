@@ -140,6 +140,9 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `svg.rs`), `familias`, `estilos`, `predeterminada` (lista de sans serif preferidas: fontdb no
   lee la de fontconfig), `datos` (bytes + índice de cara, caché de 12). La app las carga en un
   hilo al iniciar.
+- `ejemplos.rs`: `EJEMPLOS` = proyectos de muestra armados en código (muestrario con todos los
+  `PRESETS` y sus nombres como guías bloqueadas, flor, marco con texto); el test verifica que
+  generan sin avisos, caben en su bastidor y se releen igual.
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 
 ## App (`crates/edenbord/src`)
@@ -156,7 +159,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `preferencias` en `~/.local/share/edenbord/app.ron`): recientes (máx. 10, sin repetir; se
   agregan al abrir y al guardar), zoom de la interfaz (Ctrl +/−/0 los maneja egui; también en
   el menú ☰), interruptores de vista y color de tela. eframe además recuerda ventana y paneles.
-  Bienvenida y menú ☰ muestran los recientes (`recent_list`; los que no existen, deshabilitados).
+  Bienvenida y menú ☰ muestran los recientes (`recent_list`; los que no existen, deshabilitados)
+  y los ejemplos (`example_list` → `request_example`, se abren sin ruta: guardar pregunta dónde).
 - `contexto.rs`: barra contextual bajo la superior, según `Tool`: Seleccionar = X/Y/ancho/alto
   editables (proyecto: `transform_grouped`, candado proporcional `lock_ratio`; JEF: solo X/Y con
   `Doc::edit_grouped`, el tamaño se muestra), girar/espejar/escalar %/centrar (`Op`), paso de las

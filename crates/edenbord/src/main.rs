@@ -81,6 +81,8 @@ fn main() -> eframe::Result {
 enum Pending {
     /// Hay cambios sin guardar y se quiere abrir otro archivo (`None` = proyecto nuevo).
     Discard(Option<PathBuf>),
+    /// Hay cambios sin guardar y se quiere abrir un ejemplo (índice en `EJEMPLOS`).
+    DiscardForExample(usize),
     /// "Guardar como" apunta al mismo archivo abierto.
     Overwrite(PathBuf),
 }
@@ -307,6 +309,24 @@ impl Editor {
         } else {
             self.open(path.as_deref());
         }
+    }
+
+    /// Abre un proyecto de ejemplo, pidiendo confirmación si hay cambios sin guardar.
+    fn request_example(&mut self, i: usize) {
+        if self.dirty() {
+            self.pending = Some(Pending::DiscardForExample(i));
+        } else {
+            self.open_example(i);
+        }
+    }
+
+    /// Un ejemplo se abre como proyecto sin archivo: guardarlo pide dónde.
+    fn open_example(&mut self, i: usize) {
+        let Some(e) = bordado::ejemplos::EJEMPLOS.get(i) else {
+            return;
+        };
+        self.set_proyecto(ProyectoDoc::new(None, e.nombre.into(), (e.crear)()));
+        self.info(e.descripcion);
     }
 
     /// Abre según la extensión: `.edenbord` (o el antiguo `.bordado`) proyecto, `.svg` proyecto nuevo con sus trazados
@@ -929,7 +949,7 @@ impl Editor {
             return;
         };
         let (title, text, ok) = match pending {
-            Pending::Discard(_) => (
+            Pending::Discard(_) | Pending::DiscardForExample(_) => (
                 "Cambios sin guardar",
                 "Hay cambios sin guardar. ¿Descartarlos y abrir el otro archivo?",
                 "Descartar y abrir",
@@ -961,6 +981,7 @@ impl Editor {
             if yes {
                 match pending {
                     Some(Pending::Discard(path)) => self.open(path.as_deref()),
+                    Some(Pending::DiscardForExample(i)) => self.open_example(i),
                     Some(Pending::Overwrite(path)) => self.write_to(path),
                     None => {}
                 }

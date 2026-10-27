@@ -18,6 +18,8 @@ const ANCHO_MM: f64 = 12.0;
 /// Formas de muestra, centradas en el origen (mm).
 const LINEA: &str = "M-6,2.5 C-3,-6 3,8 6,-2.5";
 const ZONA: &str = "M-6,0 C-6,-6 6,-6 6,0 L6,3.5 L-6,3.5 Z";
+/// An arch for the area satin, so the stitches can be seen turning.
+const ARCO: &str = "M-6.5,3.5 A6.5,6.5 0 0 1 6.5,3.5 L3,3.5 A3,3 0 0 0 -3,3.5 Z";
 
 /// Tramos de cada preset sobre su forma de muestra (se calculan una vez).
 fn muestras() -> &'static [Vec<Tramo>] {
@@ -36,7 +38,12 @@ fn muestras() -> &'static [Vec<Tramo>] {
 
 fn objeto(grupo: Grupo, puntada: Puntada) -> Objeto {
     let zona = grupo == Grupo::Relleno;
-    let d = BezPath::from_svg(if zona { ZONA } else { LINEA }).expect("forma de muestra válida");
+    let forma = match puntada {
+        Puntada::AreaSatin { .. } => ARCO,
+        _ if zona => ZONA,
+        _ => LINEA,
+    };
+    let d = BezPath::from_svg(forma).expect("forma de muestra válida");
     Objeto {
         nombre: String::new(),
         visible: true,
@@ -49,6 +56,7 @@ fn objeto(grupo: Grupo, puntada: Puntada) -> Objeto {
         puntada,
         opacidad: OPACIDAD_GUIA,
         bloqueado: false,
+        guides: vec![],
     }
 }
 

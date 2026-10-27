@@ -45,6 +45,7 @@ fn objeto(nombre: &str, color: i32, forma: Forma, puntada: Puntada) -> Objeto {
         puntada,
         opacidad: OPACIDAD_GUIA,
         bloqueado: false,
+        guides: vec![],
     }
 }
 
@@ -107,7 +108,9 @@ fn muestrario() -> Proyecto {
             (c as f64 - (COLUMNAS - 1) as f64 / 2.0) * PASO,
             (f as f64 - (filas - 1) as f64 / 2.0) * PASO - 3.0,
         );
-        let d = if p.grupo == Grupo::Relleno {
+        let d = if matches!(p.puntada, Puntada::AreaSatin { .. }) {
+            "M-14,9 A14,14 0 0 1 14,9 L7,9 A7,7 0 0 0 -7,9 Z"
+        } else if p.grupo == Grupo::Relleno {
             "M-14,1 C-14,-12 14,-12 14,1 L14,10 L-14,10 Z M-4,-1 L4,-1 L4,6 L-4,6 Z"
         } else {
             "M-14,7 C-7,-14 7,18 14,-7"

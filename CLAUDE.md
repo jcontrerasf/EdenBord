@@ -10,7 +10,9 @@ Workspace Rust con tres crates:
   generación de puntadas, importar SVG, texto con fuentes TTF/OTF.
 - `crates/edenbord` — app egui/eframe 0.37 (binario `edenbord`) que usa ambas.
 
-Código, comentarios, mensajes de error e interfaz están **en español**. Mantenerlo así.
+La interfaz y los mensajes para el usuario van **en español**. El código está en español, pero
+se va a pasar a inglés: el código nuevo o que se toque va **en inglés** (nombres, comentarios,
+tests); las claves del JSON `.edenbord` siguen en español (`#[serde(rename = …)]`).
 
 ## Comandos
 
@@ -93,7 +95,9 @@ bastidor. El orden de `objetos` es el orden de bordado. Los proyectos antiguos (
 `.bordado`, `"formato":"bordado"` = `FORMATO_ANTIGUO`) se siguen leyendo; Ctrl+S sobre uno de
 ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto literal.
 
-- `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad, bloqueado }`.
+- `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad, bloqueado,
+  guides }`. `guides` (JSON `guias`, se omite si está vacío = automáticas): guías de ángulo del
+  satín de zona, segmentos `[[x,y],[x,y]]` en mm absolutos; `transformar` también las mueve.
   `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
   `OPACIDAD_GUIA` = 0,15). `bloqueado` (solo se escribe si es `true`): no se elige en el lienzo.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
@@ -108,6 +112,7 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `puntadas/motivo.rs`), `satin {ancho, densidad, base: ninguna|central|contorno|zigzag,
   compensacion, ahusado}` | solo zonas (`solo_zonas()`): `relleno {angulo, separacion, largo,
   base, compensacion, patron, separacion_final?}` (degradé si hay `separacion_final`),
+  `satin_zona {densidad, base, compensacion}` (`Puntada::AreaSatin`, ver abajo),
   `concentrico {separacion, largo}` (anillos con `i_overlay` outline), `cuadrille`.
   `PRESETS` = la paleta: `Preset {nombre, descripcion, grupo: Guia|Linea|Relleno, puntada}`;
   `preset_por_nombre`.
@@ -124,6 +129,17 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   por fila. La base es el mismo relleno a +90°, ralo y metido 0,5 mm.
 - `svg.rs`: usvg (transforms, unidades, textos con fuentes del sistema) → objetos guía,
   color = `palette::nearest`, centrados en el origen. 96 px por pulgada.
+- Satín de zona (`puntadas/column.rs`): por cada parte (exterior + agujeros, par-impar; las
+  guías van a la parte más cercana) una columna entre dos rieles. Sin agujeros: los extremos son
+  las dos guías que tienen a todas las demás de un lado (con menos de 2, automáticos); con un
+  agujero: exterior y agujero, vuelta completa desde la primera guía; con más agujeros no se
+  borda (aviso vía `Objeto::runs_with_warning`). Entre guías se interpola por largo de arco en
+  ambos rieles (`columns` = pares izq/der) y se cose con `satin::sew` (lo mismo que el satín de
+  línea); puntadas > 7 mm se parten escalonadas. `auto_guides`: extremos = par de puntos del
+  borde con menor ancho medio, lado recto en la punta → la guía va sobre él (`straight_end`),
+  correspondencia densa con DTW, simplificada (0,4 mm) y con guías al menos cada 10 mm.
+  `Objeto::area_guides()` = las propias o las automáticas. Formas con ramas (h, k) o colas (e)
+  salen mal: separarlas.
 - `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible,
   bloqueado}` (`bloqueado` solo se escribe si es `true`). Imagen para calcar; no se borda. Ruta
   relativa = desde la carpeta del `.edenbord`.
@@ -223,6 +239,13 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - Manija del ángulo del relleno (`Pick::Angulo`, `Gesto::Angulo`): con un solo objeto con
   `Puntada::angulo()`, una línea desde el centro; arrastrarla cambia el ángulo en vivo
   (`edit_grouped`), Shift = de a 15°, Esc deshace. `gestos::angulo_filas` (en (−90, 90]).
+- Guías del satín de zona en el lienzo (Seleccionar, un solo objeto `AreaSatin` no bloqueado;
+  `guide_handles`, en caché en `ProyectoDoc.guides`, punteadas si son automáticas): arrastrar
+  un extremo (`Pick::Guide`, `Gesto::Guide`, en vivo y pegado al borde con
+  `nearest_edge_point`; Esc deshace), doble clic dentro = guía nueva (`guide_at`: la puntada
+  más cercana), clic en una guía la elige (`Editor.selected_guide`) y Supr la borra.
+  `edit_guides` copia antes las automáticas al objeto. Panel: «Automáticas» las descarta.
+  Separar y booleanas borran las guías; combinar las junta.
 - Con varios objetos seleccionados, el panel edita los parámetros del primero y los aplica con
   `copiar_cambios` a los del mismo tipo; el selector de color pinta toda la selección si el
   objeto elegido es parte de ella.
@@ -298,7 +321,7 @@ rectángulo de selección, portapapeles, duplicar, editar nodos.
 
 Ideas pendientes:
 - `.ai` directo (leyendo su parte PDF).
-- Satín automático en formas cerradas y letras (hoy el satín es de ancho fijo sobre el trazado).
+- Satín de zona en formas con ramas (h, k, A) o colas (e): partirlas solas en columnas.
 - Kerning en textos; marcar cortes de hilo (hoy solo saltos).
 - Exportar a DST/EXP (simples) y PES (complejo).
 - Soporte `.JBF`.

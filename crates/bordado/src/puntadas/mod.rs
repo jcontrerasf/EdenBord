@@ -1,6 +1,7 @@
 //! Generadores de puntadas. Todos trabajan en mm y devuelven tramos: secuencias de puntos que
 //! se cosen seguidos. Entre un tramo y el siguiente la máquina salta (con remates).
 
+mod column;
 mod concentrico;
 mod corrido;
 mod lineas;
@@ -11,6 +12,7 @@ mod satin;
 
 use kurbo::Point;
 
+pub use column::{AreaSatin, Guide, area_satin, auto_guides, columns};
 pub use concentrico::concentrico;
 pub use corrido::corrido;
 pub use lineas::{feston, manual, punto_atras, tallo};

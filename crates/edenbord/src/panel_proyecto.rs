@@ -195,6 +195,7 @@ impl Editor {
             puntada: Puntada::Ninguna,
             opacidad: bordado::OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         }]);
         self.pen = Default::default();
     }
@@ -651,6 +652,9 @@ fn properties_section(
         opacity_slider(ui, &mut obj.opacidad);
     }
     puntada_params(ui, &mut obj.puntada);
+    if matches!(obj.puntada, Puntada::AreaSatin { .. }) {
+        guides_row(ui, &mut obj, doc.guides[i].len());
+    }
     if let Forma::Texto {
         texto,
         fuente,
@@ -708,6 +712,28 @@ fn properties_section(
     font
 }
 
+/// Angle guides of an area satin: how many there are, whether they are automatic, and a
+/// button to go back to the automatic ones.
+fn guides_row(ui: &mut egui::Ui, obj: &mut Objeto, count: usize) {
+    ui.horizontal(|ui| {
+        let auto = obj.guides.is_empty();
+        let kind = if auto { "automáticas" } else { "propias" };
+        ui.label(format!("Guías de ángulo: {count} {kind}"))
+            .on_hover_text(
+                "Arrastra los extremos de una guía para girar las puntadas; doble clic dentro de \
+                 la forma agrega una; clic en una guía y Supr la borra",
+            );
+        if !auto
+            && ui
+                .button(format!("{} Automáticas", iconos::AUTO_GUIDES))
+                .on_hover_text("Descarta las guías editadas y las calcula de nuevo según la forma")
+                .clicked()
+        {
+            obj.guides.clear();
+        }
+    });
+}
+
 /// Una guía que es zona: se ve rellena con su color de hilo y esta opacidad.
 fn es_guia_zona(o: &Objeto) -> bool {
     o.puntada == Puntada::Ninguna && o.es_zona()
@@ -735,6 +761,7 @@ pub(crate) fn icono_puntada(p: &Puntada) -> &'static str {
         Puntada::Feston { .. } => iconos::FESTON,
         Puntada::Motivo { .. } => iconos::MOTIVO,
         Puntada::Satin { .. } => iconos::SATIN,
+        Puntada::AreaSatin { .. } => iconos::AREA_SATIN,
         Puntada::Relleno {
             separacion_final: Some(_),
             ..
@@ -868,6 +895,26 @@ fn puntada_params(ui: &mut egui::Ui, puntada: &mut Puntada) {
                 ui.checkbox(ahusado, "Puntas finas")
                     .on_hover_text("Empieza y termina en punta: tallos, hojas, caligrafía");
                 ui.end_row();
+            }
+            Puntada::AreaSatin {
+                density,
+                base,
+                compensation,
+            } => {
+                fila(
+                    ui,
+                    "Densidad",
+                    "Distancia entre puntadas del mismo lado (en el borde más largo): menos = \
+                     más tupido",
+                    mm(density, 0.2..=3.0),
+                );
+                fila(
+                    ui,
+                    "Compensación",
+                    "Alarga cada puntada a los dos lados: el hilo tira y la columna se angosta",
+                    mm(compensation, -0.5..=1.0),
+                );
+                opciones(ui, "Base", base, &BaseSatin::TODAS, BaseSatin::nombre);
             }
             Puntada::Relleno {
                 angulo,

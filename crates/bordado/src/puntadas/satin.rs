@@ -31,57 +31,64 @@ pub fn satin(
         .iter()
         .map(|pl| {
             let bordes = bordes(pl, ancho, densidad, compensacion, ahusado);
-            let zigzag: Vec<Point> = bordes
-                .iter()
-                .enumerate()
-                .map(|(i, &(izq, der))| if i % 2 == 0 { izq } else { der })
-                .collect();
-            let centro: Vec<Point> = bordes.iter().map(|(a, b)| a.midpoint(*b)).collect();
-            let adentro = |p: Point, c: Point| {
-                let d = p - c;
-                let h = d.hypot();
-                c + unitario(d) * (h - MARGEN_BASE).max(0.0)
-            };
-            match base {
-                BaseSatin::Ninguna => zigzag,
-                BaseSatin::Central => con_vuelta(remuestrear(&centro, LARGO_BASE), zigzag),
-                BaseSatin::Zigzag => {
-                    let cada = ((PASO_ZIGZAG / densidad).round() as usize).max(2);
-                    let ralo: Vec<Point> = bordes
-                        .iter()
-                        .zip(&centro)
-                        .enumerate()
-                        .filter(|(i, _)| i % cada == 0 || *i == bordes.len() - 1)
-                        .enumerate()
-                        .map(|(k, (_, (&(izq, der), &c)))| {
-                            let p = if k % 2 == 0 { izq } else { der };
-                            c.lerp(p, ANCHO_ZIGZAG)
-                        })
-                        .collect();
-                    con_vuelta(ralo, zigzag)
-                }
-                BaseSatin::Contorno => {
-                    // Por un borde hacia adelante, por el otro de vuelta, y el satín de nuevo
-                    // hacia adelante.
-                    let ida: Vec<Point> = bordes
-                        .iter()
-                        .zip(&centro)
-                        .map(|(&(izq, _), &c)| adentro(izq, c))
-                        .collect();
-                    let vuelta: Vec<Point> = bordes
-                        .iter()
-                        .zip(&centro)
-                        .rev()
-                        .map(|(&(_, der), &c)| adentro(der, c))
-                        .collect();
-                    let mut out = remuestrear(&ida, LARGO_BASE);
-                    out.extend(remuestrear(&vuelta, LARGO_BASE));
-                    out.extend(zigzag);
-                    out
-                }
-            }
+            sew(&bordes, densidad, base)
         })
         .collect()
+}
+
+/// Sews a satin column from its (left, right) edge pairs, `density / 2` apart: the underlay
+/// goes first and the zigzag comes back over it; with central or zigzag underlay the column
+/// ends where it started.
+pub fn sew(edges: &[(Point, Point)], density: f64, base: BaseSatin) -> Tramo {
+    let zigzag: Vec<Point> = edges
+        .iter()
+        .enumerate()
+        .map(|(i, &(izq, der))| if i % 2 == 0 { izq } else { der })
+        .collect();
+    let centro: Vec<Point> = edges.iter().map(|(a, b)| a.midpoint(*b)).collect();
+    let adentro = |p: Point, c: Point| {
+        let d = p - c;
+        let h = d.hypot();
+        c + unitario(d) * (h - MARGEN_BASE).max(0.0)
+    };
+    match base {
+        BaseSatin::Ninguna => zigzag,
+        BaseSatin::Central => con_vuelta(remuestrear(&centro, LARGO_BASE), zigzag),
+        BaseSatin::Zigzag => {
+            let cada = ((PASO_ZIGZAG / density).round() as usize).max(2);
+            let ralo: Vec<Point> = edges
+                .iter()
+                .zip(&centro)
+                .enumerate()
+                .filter(|(i, _)| i % cada == 0 || *i == edges.len() - 1)
+                .enumerate()
+                .map(|(k, (_, (&(izq, der), &c)))| {
+                    let p = if k % 2 == 0 { izq } else { der };
+                    c.lerp(p, ANCHO_ZIGZAG)
+                })
+                .collect();
+            con_vuelta(ralo, zigzag)
+        }
+        BaseSatin::Contorno => {
+            // Por un borde hacia adelante, por el otro de vuelta, y el satín de nuevo
+            // hacia adelante.
+            let ida: Vec<Point> = edges
+                .iter()
+                .zip(&centro)
+                .map(|(&(izq, _), &c)| adentro(izq, c))
+                .collect();
+            let vuelta: Vec<Point> = edges
+                .iter()
+                .zip(&centro)
+                .rev()
+                .map(|(&(_, der), &c)| adentro(der, c))
+                .collect();
+            let mut out = remuestrear(&ida, LARGO_BASE);
+            out.extend(remuestrear(&vuelta, LARGO_BASE));
+            out.extend(zigzag);
+            out
+        }
+    }
 }
 
 /// La base hacia adelante y el satín de vuelta.

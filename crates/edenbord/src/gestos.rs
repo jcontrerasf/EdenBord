@@ -51,6 +51,14 @@ pub enum Gesto {
         /// El ángulo al empezar: si cambió, cancelar deshace la edición.
         inicial: f64,
     },
+    /// Dragging end `end` (0 or 1) of angle guide `guide` of area satin `obj`. Applied live,
+    /// snapped to the shape's edge; `changed`: cancelling has to undo it.
+    Guide {
+        obj: usize,
+        guide: usize,
+        end: usize,
+        changed: bool,
+    },
 }
 
 /// Modificadores que cambian el gesto.
@@ -85,6 +93,8 @@ impl Gesto {
             Gesto::Angulo { centro, angulo, .. } => {
                 *angulo = angulo_filas(*centro, hasta, mods.shift);
             }
+            // Needs the shape to snap to: the canvas does it.
+            Gesto::Guide { .. } => {}
         }
     }
 }

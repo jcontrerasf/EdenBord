@@ -161,6 +161,8 @@ struct Editor {
     gesto: Option<gestos::Gesto>,
     /// La imagen de fondo está elegida (muestra sus manijas) en vez de objetos.
     fondo_sel: bool,
+    /// Angle guide picked on the canvas (object, guide): Supr deletes it.
+    selected_guide: Option<(usize, usize)>,
     /// Herramienta de nodos: objeto en edición, nodos elegidos y arrastre en curso.
     nodos_obj: Option<usize>,
     nodos_sel: Vec<nodos::Id>,
@@ -219,6 +221,7 @@ impl Default for Editor {
             fabric: Color32::from_rgb(196, 190, 178),
             gesto: None,
             fondo_sel: false,
+            selected_guide: None,
             nodos_obj: None,
             nodos_sel: vec![],
             gesto_nodo: None,
@@ -389,6 +392,7 @@ impl Editor {
         self.gesto = None;
         self.escritura = None;
         self.fondo_sel = false;
+        self.selected_guide = None;
         self.nodos_obj = None;
         self.nodos_sel.clear();
         self.gesto_nodo = None;
@@ -515,13 +519,15 @@ impl Editor {
             (false, false)
         } else if self.gesto.is_some() {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-                // El ángulo del relleno se aplica en vivo: cancelar lo deshace.
-                if let Some(gestos::Gesto::Angulo {
-                    angulo, inicial, ..
-                }) = self.gesto.take()
-                    && angulo != inicial
-                    && let Some(doc) = &mut self.proyecto
-                {
+                // El ángulo del relleno y las guías se aplican en vivo: cancelar los deshace.
+                let changed = match self.gesto.take() {
+                    Some(gestos::Gesto::Angulo {
+                        angulo, inicial, ..
+                    }) => angulo != inicial,
+                    Some(gestos::Gesto::Guide { changed, .. }) => changed,
+                    _ => false,
+                };
+                if changed && let Some(doc) = &mut self.proyecto {
                     doc.undo();
                 }
             }
@@ -586,6 +592,8 @@ impl Editor {
                     let ids = std::mem::take(&mut self.nodos_sel);
                     doc.edit_nodes(i, |subs| nodos::borrar(subs, &ids));
                 }
+            } else if delete && let Some((obj, guide)) = self.selected_guide.take() {
+                doc.remove_guide(obj, guide);
             } else if delete && self.fondo_sel {
                 doc.edit(|p| p.fondo = None);
                 self.fondo_sel = false;
@@ -656,6 +664,8 @@ impl Editor {
         }
         if escape && !self.nodos_sel.is_empty() {
             self.nodos_sel.clear();
+        } else if escape && self.selected_guide.is_some() {
+            self.selected_guide = None;
         } else if escape {
             doc.seleccion.fill(false);
             self.fondo_sel = false;

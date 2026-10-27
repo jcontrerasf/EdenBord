@@ -68,6 +68,10 @@ pub struct Objeto {
     /// Bloqueado: no se elige ni se mueve en el lienzo (sí desde la lista de objetos).
     #[serde(default, skip_serializing_if = "no")]
     pub bloqueado: bool,
+    /// Angle guides of an area satin ([`Puntada::AreaSatin`]): segments across the shape, in
+    /// mm. Empty = automatic.
+    #[serde(rename = "guias", default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<[[f64; 2]; 2]>,
 }
 
 /// Opacidad con que se ven las guías si no se elige otra: muy traslúcidas.
@@ -164,6 +168,16 @@ pub enum Puntada {
         /// Puntas finas al empezar y terminar (tallos, hojas, trazos caligráficos).
         #[serde(default)]
         ahusado: bool,
+    },
+    /// Satin column that fills an area and turns with it, following the angle guides
+    /// ([`Objeto::guides`]).
+    #[serde(rename = "satin_zona")]
+    AreaSatin {
+        #[serde(rename = "densidad")]
+        density: f64,
+        base: BaseSatin,
+        #[serde(rename = "compensacion", default)]
+        compensation: f64,
     },
     /// Relleno tatami de una zona cerrada.
     Relleno {
@@ -325,6 +339,7 @@ impl Puntada {
             Puntada::Feston { .. } => "Festón",
             Puntada::Motivo { .. } => "Motivo",
             Puntada::Satin { .. } => "Satín",
+            Puntada::AreaSatin { .. } => "Satín de zona",
             Puntada::Relleno { .. } => "Relleno",
             Puntada::Concentrico { .. } => "Relleno concéntrico",
             Puntada::Cuadrille { .. } => "Cuadrillé",
@@ -335,7 +350,10 @@ impl Puntada {
     pub fn solo_zonas(&self) -> bool {
         matches!(
             self,
-            Puntada::Relleno { .. } | Puntada::Concentrico { .. } | Puntada::Cuadrille { .. }
+            Puntada::Relleno { .. }
+                | Puntada::AreaSatin { .. }
+                | Puntada::Concentrico { .. }
+                | Puntada::Cuadrille { .. }
         )
     }
 
@@ -580,6 +598,16 @@ pub const PRESETS: &[Preset] = &[
         },
     ),
     preset(
+        "Satín de zona",
+        "Satín que llena la zona y gira con ella siguiendo las guías: letras y trazos",
+        Grupo::Relleno,
+        Puntada::AreaSatin {
+            density: 0.4,
+            base: BaseSatin::Contorno,
+            compensation: 0.15,
+        },
+    ),
+    preset(
         "Relleno 45°",
         "Tatami: filas parejas que cubren la zona",
         Grupo::Relleno,
@@ -704,6 +732,10 @@ impl Objeto {
         match &mut self.forma {
             Forma::Contorno { d } | Forma::Linea { d } => d.apply_affine(t),
             Forma::Texto { afin, .. } => *afin = (t * Affine::new(*afin)).as_coeffs(),
+        }
+        for p in self.guides.iter_mut().flatten() {
+            let q = t * kurbo::Point::new(p[0], p[1]);
+            *p = [q.x, q.y];
         }
     }
 }
@@ -849,6 +881,7 @@ mod tests {
             puntada: preset_por_nombre("Relleno 45°"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         });
         p.objetos.push(Objeto {
             nombre: "texto".into(),
@@ -864,6 +897,7 @@ mod tests {
             puntada: Puntada::Ninguna,
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         });
         let text = p.guardar();
         assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
@@ -913,6 +947,7 @@ mod tests {
             puntada: preset_por_nombre("Pespunte"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert_eq!(pegar_objetos(&text), Some(vec![o]));
@@ -1033,6 +1068,37 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn guides_are_saved_and_transformed() {
+        let mut o = Objeto {
+            nombre: "c".into(),
+            visible: true,
+            color: 1,
+            forma: Forma::Contorno {
+                d: BezPath::from_svg("M0,0 L10,0 L10,2 L0,2 Z").unwrap(),
+            },
+            puntada: preset_por_nombre("Satín de zona"),
+            opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
+            guides: vec![],
+        };
+        let text = copiar_objetos(std::slice::from_ref(&o));
+        assert!(!text.contains("guias"), "automatic guides aren't written");
+        assert!(
+            text.contains(r#""tipo":"satin_zona","densidad":0.4"#),
+            "{text}"
+        );
+        o.guides = vec![[[5.0, 0.0], [5.0, 2.0]]];
+        let text = copiar_objetos(std::slice::from_ref(&o));
+        assert!(
+            text.contains(r#""guias":[[[5.0,0.0],[5.0,2.0]]]"#),
+            "{text}"
+        );
+        assert_eq!(pegar_objetos(&text), Some(vec![o.clone()]));
+        o.transformar(Affine::translate((1.0, 3.0)));
+        assert_eq!(o.guides, vec![[[6.0, 3.0], [6.0, 5.0]]]);
     }
 
     #[test]

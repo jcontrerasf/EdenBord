@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use bordado::booleanas::{self, Booleana};
 use bordado::geom::{self, Polilinea, polilineas};
+use bordado::puntadas::Guide;
 use bordado::{Forma, Generado, Objeto, Proyecto, Puntada};
 use jef::Bounds;
-use kurbo::{Affine, Point, Rect};
+use kurbo::{Affine, ParamCurve, ParamCurveNearest, Point, Rect};
 
 use crate::nodos;
 
@@ -27,6 +28,8 @@ pub struct ProyectoDoc {
     pub lineas: Vec<Vec<Polilinea>>,
     /// Relleno de las guías que son zonas, en trapecios (mm), para verlas con sus agujeros.
     pub relleno_guias: Vec<Vec<[Point; 4]>>,
+    /// Angle guides of each area satin (its own or the automatic ones); empty for the rest.
+    pub guides: Vec<Vec<Guide>>,
     /// Versiones anteriores y siguientes, cada una con su selección.
     undo: Vec<(Proyecto, Vec<bool>)>,
     redo: Vec<(Proyecto, Vec<bool>)>,
@@ -46,6 +49,7 @@ impl ProyectoDoc {
             generado,
             lineas: vec![],
             relleno_guias: vec![],
+            guides: vec![],
             undo: vec![],
             redo: vec![],
             last_key: None,
@@ -165,6 +169,15 @@ impl ProyectoDoc {
                 } else {
                     vec![]
                 }
+            })
+            .collect();
+        self.guides = self
+            .proyecto
+            .objetos
+            .iter()
+            .map(|o| match o.puntada {
+                Puntada::AreaSatin { .. } => o.area_guides(),
+                _ => vec![],
             })
             .collect();
         self.seleccion.resize(self.proyecto.objetos.len(), false);
@@ -363,11 +376,14 @@ impl ProyectoDoc {
         let (first, rest) = (*first, rest.to_vec());
         self.edit(|p| {
             let mut extra = Vec::new();
+            let mut guides = Vec::new();
             for &i in &rest {
                 if let Forma::Contorno { d } = &p.objetos[i].forma {
                     extra.extend(d.elements().iter().copied());
                 }
+                guides.extend_from_slice(&p.objetos[i].guides);
             }
+            p.objetos[first].guides.extend(guides);
             if let Forma::Contorno { d } = &mut p.objetos[first].forma {
                 for el in extra {
                     d.push(el);
@@ -420,6 +436,7 @@ impl ProyectoDoc {
                             Forma::Linea { .. } => Forma::Linea { d },
                             _ => Forma::Contorno { d },
                         },
+                        guides: vec![],
                         ..original.clone()
                     })
                     .collect();
@@ -465,6 +482,8 @@ impl ProyectoDoc {
         let (first, rest) = (sel[0], &sel[1..]);
         self.edit(|p| {
             p.objetos[first].forma = Forma::Contorno { d };
+            // A new shape: its own guides would no longer fit.
+            p.objetos[first].guides.clear();
             if op != Booleana::Restar {
                 let mut i = 0;
                 p.objetos.retain(|_| {
@@ -608,6 +627,60 @@ impl ProyectoDoc {
         Ok(())
     }
 
+    /// Edits the angle guides of object `i`. If it had none of its own (automatic), it gets
+    /// the automatic ones first, so `f` sees the guides as drawn. Grouped by `key` if given.
+    pub fn edit_guides(&mut self, i: usize, key: Option<String>, f: impl FnOnce(&mut Vec<Guide>)) {
+        let mut guides = self.guides[i].clone();
+        f(&mut guides);
+        let guides: Vec<[[f64; 2]; 2]> = guides.iter().map(|g| g.map(|p| [p.x, p.y])).collect();
+        let apply = |p: &mut Proyecto| p.objetos[i].guides = guides;
+        match key {
+            Some(key) => self.edit_grouped(key, apply),
+            None => self.edit(apply),
+        }
+    }
+
+    pub fn remove_guide(&mut self, i: usize, guide: usize) {
+        if self.guides.get(i).is_some_and(|g| guide < g.len()) {
+            self.edit_guides(i, None, |g| {
+                g.remove(guide);
+            });
+        }
+    }
+
+    /// The point of the edge of object `i` nearest to `p` (mm).
+    pub fn nearest_edge_point(&self, i: usize, p: Point) -> Option<Point> {
+        self.lineas[i]
+            .iter()
+            .flat_map(|pl| {
+                let n = pl.puntos.len();
+                let segs = if pl.cerrada { n } else { n - 1 };
+                (0..segs).map(move |k| {
+                    let seg = kurbo::Line::new(pl.puntos[k], pl.puntos[(k + 1) % n]);
+                    seg.eval(seg.nearest(p, 1e-9).t)
+                })
+            })
+            .min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)))
+    }
+
+    /// A new guide through `p` inside area satin `i`: the stitch of its column nearest to `p`.
+    pub fn guide_at(&self, i: usize, p: Point) -> Option<Guide> {
+        let Puntada::AreaSatin { density, .. } = self.proyecto.objetos[i].puntada else {
+            return None;
+        };
+        let rings: Vec<Vec<Point>> = self.lineas[i].iter().map(|pl| pl.puntos.clone()).collect();
+        bordado::puntadas::columns(&rings, &self.guides[i], density)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .min_by(|x, y| {
+                let d =
+                    |(a, b): (Point, Point)| kurbo::Line::new(a, b).nearest(p, 1e-9).distance_sq;
+                d(*x).total_cmp(&d(*y))
+            })
+            .map(|(a, b)| [a, b])
+    }
+
     pub fn select_all(&mut self) {
         self.seleccion.fill(true);
     }
@@ -704,6 +777,7 @@ mod tests {
             puntada,
             opacidad: bordado::OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         };
         let mut p = Proyecto::default();
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.
@@ -771,6 +845,39 @@ mod tests {
             Some(2),
             "ni su borde"
         );
+    }
+
+    #[test]
+    fn editing_a_guide_keeps_the_automatic_ones() {
+        let mut d = doc();
+        d.edit(|p| {
+            p.objetos[0].forma = Forma::Contorno {
+                d: BezPath::from_svg("M0,0 L30,0 L30,4 L0,4 Z").unwrap(),
+            };
+            p.objetos[0].puntada = bordado::preset_por_nombre("Satín de zona");
+        });
+        let auto = d.guides[0].clone();
+        assert!(auto.len() >= 2 && d.proyecto.objetos[0].guides.is_empty());
+        assert!(d.guides[1].is_empty(), "only area satins have guides");
+
+        // Moving one end turns the automatic guides into the object's own.
+        let q = d.nearest_edge_point(0, Point::new(12.0, -3.0)).unwrap();
+        assert_eq!(q, Point::new(12.0, 0.0));
+        d.edit_guides(0, None, |g| g[1][0] = q);
+        assert_eq!(d.proyecto.objetos[0].guides.len(), auto.len());
+        assert_eq!(d.guides[0][1][0], q);
+
+        // A new guide where the column is; deleting all of them goes back to automatic.
+        let g = d.guide_at(0, Point::new(20.0, 2.0)).unwrap();
+        assert!(
+            (g[0].x - 20.0).abs() < 1.0 && (g[0].y - g[1].y).abs() > 3.9,
+            "{g:?}"
+        );
+        for _ in 0..auto.len() {
+            d.remove_guide(0, 0);
+        }
+        assert!(d.proyecto.objetos[0].guides.is_empty());
+        assert_eq!(d.guides[0], auto);
     }
 
     #[test]

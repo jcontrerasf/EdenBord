@@ -484,6 +484,11 @@ impl Editor {
         if let Some((_, centro, punta)) = self.angle_handle(vista) {
             draw_angle_handle(painter, vista.mm(centro), punta);
         }
+        if let Some((obj, guides)) = self.guide_handles() {
+            let auto = doc.proyecto.objetos[obj].guides.is_empty();
+            let picked = self.selected_guide.filter(|s| s.0 == obj).map(|s| s.1);
+            draw_guides(painter, vista, guides, auto, picked);
+        }
         draw_needle(painter, vista, jef, progress);
         if self.tool == Tool::Pen {
             self.draw_pen(painter, response, vista);
@@ -562,12 +567,59 @@ impl Editor {
         Some((i, centro, punta))
     }
 
+    /// Angle guides to edit on the canvas: with a single area satin selected (not locked) and
+    /// no transform going on. The object and its guides (mm).
+    fn guide_handles(&self) -> Option<(usize, &[bordado::puntadas::Guide])> {
+        if self.tool != Tool::Select
+            || matches!(
+                self.gesto,
+                Some(Gesto::Transformar { .. } | Gesto::Caja { .. })
+            )
+        {
+            return None;
+        }
+        let doc = self.proyecto.as_ref()?;
+        let [i] = doc.selection()[..] else {
+            return None;
+        };
+        let obj = &doc.proyecto.objetos[i];
+        let area = matches!(obj.puntada, bordado::Puntada::AreaSatin { .. });
+        (area && !obj.bloqueado).then(|| (i, &doc.guides[i][..]))
+    }
+
+    /// The angle guide under the pointer: object, guide and which end (`None` = on the line).
+    fn guide_hit(&self, vista: Vista, pos: Pos2) -> Option<(usize, usize, Option<usize>)> {
+        let (obj, guides) = self.guide_handles()?;
+        let ends = guides
+            .iter()
+            .enumerate()
+            .flat_map(|(k, g)| (0..2).map(move |e| (k, e, vista.mm(g[e]).distance(pos))));
+        if let Some((k, e, _)) = ends
+            .filter(|&(_, _, d)| d <= HANDLE_PX)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+        {
+            return Some((obj, k, Some(e)));
+        }
+        guides
+            .iter()
+            .position(|g| {
+                let (a, b) = (vista.mm(g[0]), vista.mm(g[1]));
+                let ab = b - a;
+                let t = ((pos - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                (a + ab * t).distance(pos) <= PICK_PX
+            })
+            .map(|k| (obj, k, None))
+    }
+
     /// Qué hay bajo el puntero, en orden de prioridad.
     fn pick(&self, vista: Vista, pos: Pos2) -> Pick {
         if let Some((i, _, punta)) = self.angle_handle(vista)
             && punta.distance(pos) <= HANDLE_PX
         {
             return Pick::Angulo(i);
+        }
+        if let Some((obj, guide, Some(end))) = self.guide_hit(vista, pos) {
+            return Pick::Guide { obj, guide, end };
         }
         if let Some((r, completo)) = self.handles_rect(vista)
             && let Some(tipo) = handles(r, completo)
@@ -642,7 +694,7 @@ impl Editor {
         {
             let icon = match self.pick(vista, pos) {
                 Pick::Manija(t) => handle_cursor(t),
-                Pick::Angulo(_) => egui::CursorIcon::Grab,
+                Pick::Angulo(_) | Pick::Guide { .. } => egui::CursorIcon::Grab,
                 Pick::Seleccion | Pick::Objeto(_) => egui::CursorIcon::Move,
                 Pick::Fondo if self.fondo_sel => egui::CursorIcon::Move,
                 _ => egui::CursorIcon::Default,
@@ -671,6 +723,16 @@ impl Editor {
                 });
                 return;
             }
+            if let Pick::Guide { obj, guide, end } = pick {
+                self.selected_guide = Some((obj, guide));
+                self.gesto = Some(Gesto::Guide {
+                    obj,
+                    guide,
+                    end,
+                    changed: false,
+                });
+                return;
+            }
             let doc = self.proyecto.as_mut().unwrap();
             match pick {
                 Pick::Objeto(i) => {
@@ -689,7 +751,7 @@ impl Editor {
             let tipo = match pick {
                 Pick::Manija(t) => Some(t),
                 Pick::Seleccion | Pick::Objeto(_) | Pick::Fondo => Some(Tipo::Mover),
-                Pick::Nada | Pick::Angulo(_) => None,
+                Pick::Nada | Pick::Angulo(_) | Pick::Guide { .. } => None,
             };
             self.gesto = match (tipo, self.target_rect()) {
                 (Some(tipo), Some((r0, blanco))) => Some(Gesto::Transformar {
@@ -721,16 +783,58 @@ impl Editor {
                     }
                 });
             }
+            // The guide end follows the pointer along the edge of the shape.
+            if let Gesto::Guide {
+                obj,
+                guide,
+                end,
+                changed,
+            } = g
+                && let Some(doc) = self.proyecto.as_mut()
+                && let Some(q) = doc.nearest_edge_point(*obj, vista.to_mm(pos))
+                && doc.guides[*obj]
+                    .get(*guide)
+                    .is_some_and(|g| g[*end].distance(q) > 1e-6)
+            {
+                let (guide, end) = (*guide, *end);
+                doc.edit_guides(*obj, Some(format!("guia {obj}")), |g| g[guide][end] = q);
+                *changed = true;
+            }
         }
         if response.drag_stopped() {
             self.finish_gesture();
+        }
+
+        // Click on an angle guide: pick it (Supr deletes it). Double click inside the area
+        // satin: a new guide there.
+        if response.clicked_by(Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            self.selected_guide = self
+                .guide_hit(vista, pos)
+                .map(|(obj, guide, _)| (obj, guide));
+            if self.selected_guide.is_some() {
+                return;
+            }
+        }
+        if response.double_clicked_by(Primary)
+            && let Some(pos) = response.interact_pointer_pos()
+            && let Some((obj, _)) = self.guide_handles()
+            && let Some(doc) = self.proyecto.as_mut()
+            && let p = vista.to_mm(pos)
+            && doc.object_at(p, 0.0) == Some(obj)
+            && let Some(g) = doc.guide_at(obj, p)
+        {
+            doc.edit_guides(obj, None, |guides| guides.push(g));
+            self.selected_guide = Some((obj, doc.guides[obj].len() - 1));
+            return;
         }
 
         // Clic: elegir objeto (o el fondo); Ctrl o Shift: agregar o quitar de la selección.
         if response.clicked_by(Primary)
             && let Some(pos) = response.interact_pointer_pos()
             && let pick = self.pick(vista, pos)
-            && !matches!(pick, Pick::Manija(_) | Pick::Angulo(_))
+            && !matches!(pick, Pick::Manija(_) | Pick::Angulo(_) | Pick::Guide { .. })
         {
             let doc = self.proyecto.as_mut().unwrap();
             let p = vista.to_mm(pos);
@@ -779,7 +883,7 @@ impl Editor {
                 }
             }
             // Ya se aplicó mientras se arrastraba.
-            Gesto::Angulo { .. } => {}
+            Gesto::Angulo { .. } | Gesto::Guide { .. } => {}
             Gesto::Caja { a, b, sumar } => {
                 let dentro = doc.objects_in(kurbo::Rect::from_points(a, b));
                 if !sumar {
@@ -1084,6 +1188,7 @@ impl Editor {
                 return;
             }
             Gesto::Angulo { angulo, .. } => format!("Filas a {angulo:.0}°"),
+            Gesto::Guide { .. } => return,
             Gesto::Transformar { tipo, r0, af, .. } => match tipo {
                 Tipo::Mover => {
                     let d = af.translation();
@@ -1144,6 +1249,12 @@ enum Pick {
     Manija(Tipo),
     /// La manija del ángulo del relleno de un objeto.
     Angulo(usize),
+    /// An end of an angle guide of an area satin.
+    Guide {
+        obj: usize,
+        guide: usize,
+        end: usize,
+    },
     /// Un objeto seleccionado o el interior del marco de la selección.
     Seleccion,
     Objeto(usize),
@@ -1192,6 +1303,40 @@ fn draw_angle_handle(painter: &egui::Painter, centro: Pos2, punta: Pos2) {
     painter.line_segment([atras, punta], linea);
     painter.circle_filled(centro, 2.5, ANGLE_COLOR);
     painter.circle(punta, 5.0, Color32::WHITE, Stroke::new(1.5, ANGLE_COLOR));
+}
+
+/// Angle guides of an area satin: a line across the shape with a square at each end (dashed
+/// while they are the automatic ones); the picked one, filled.
+fn draw_guides(
+    painter: &egui::Painter,
+    vista: Vista,
+    guides: &[bordado::puntadas::Guide],
+    auto: bool,
+    picked: Option<usize>,
+) {
+    let halo = Stroke::new(3.5, Color32::from_white_alpha(170));
+    for (k, g) in guides.iter().enumerate() {
+        let (a, b) = (vista.mm(g[0]), vista.mm(g[1]));
+        let here = picked == Some(k);
+        let line = Stroke::new(if here { 2.0 } else { 1.5 }, ANGLE_COLOR);
+        painter.line_segment([a, b], halo);
+        if auto && !here {
+            painter.extend(Shape::dashed_line(&[a, b], line, 5.0, 3.0));
+        } else {
+            painter.line_segment([a, b], line);
+        }
+        let fill = if here { ANGLE_COLOR } else { Color32::WHITE };
+        for p in [a, b] {
+            let q = Rect::from_center_size(p, Vec2::splat(7.0));
+            painter.rect(
+                q,
+                0.0,
+                fill,
+                Stroke::new(1.5, ANGLE_COLOR),
+                egui::StrokeKind::Middle,
+            );
+        }
+    }
 }
 
 fn draw_box(painter: &egui::Painter, r: Rect) {

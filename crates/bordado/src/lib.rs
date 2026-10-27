@@ -58,10 +58,35 @@ impl Objeto {
 
     /// Tramos de puntadas en mm. `desde` es donde está la aguja.
     pub fn tramos(&self, desde: Point) -> Result<Vec<Tramo>, String> {
+        self.runs_with_warning(desde).map(|(runs, _)| runs)
+    }
+
+    /// The angle guides of an area satin: its own, or the automatic ones if it has none.
+    pub fn area_guides(&self) -> Vec<puntadas::Guide> {
+        if !self.guides.is_empty() {
+            return self.own_guides();
+        }
+        let Ok(d) = self.trazado() else {
+            return vec![];
+        };
+        let rings: Vec<Vec<Point>> = polilineas(&d).into_iter().map(|pl| pl.puntos).collect();
+        puntadas::auto_guides(&rings)
+    }
+
+    fn own_guides(&self) -> Vec<puntadas::Guide> {
+        self.guides
+            .iter()
+            .map(|[a, b]| [Point::new(a[0], a[1]), Point::new(b[0], b[1])])
+            .collect()
+    }
+
+    /// Like [`tramos`](Self::tramos), plus a warning when part of the object can't be sewn.
+    fn runs_with_warning(&self, desde: Point) -> Result<(Vec<Tramo>, Option<String>), String> {
         let lineas = polilineas(&self.trazado()?);
         // Como en SVG, un trazado abierto se rellena como si estuviera cerrado.
         let anillos = || -> Vec<Vec<Point>> { lineas.iter().map(|pl| pl.puntos.clone()).collect() };
-        Ok(match self.puntada {
+        let mut warning = None;
+        let runs = match self.puntada {
             Puntada::Ninguna => vec![],
             Puntada::Corrido { largo, pasadas } => puntadas::corrido(&lineas, largo, pasadas),
             Puntada::Manual => puntadas::manual(&lineas),
@@ -84,6 +109,27 @@ impl Objeto {
                 compensacion,
                 ahusado,
             } => puntadas::satin(&lineas, ancho, densidad, base, compensacion, ahusado),
+            Puntada::AreaSatin {
+                density,
+                base,
+                compensation,
+            } => {
+                let r = puntadas::area_satin(
+                    &anillos(),
+                    &self.own_guides(),
+                    density,
+                    base,
+                    compensation,
+                );
+                if r.skipped > 0 {
+                    warning = Some(format!(
+                        "{} parte(s) no se pudieron bordar como columna (tienen más de un \
+                         agujero): sepáralas con «Separar trazados», las booleanas o la pluma",
+                        r.skipped
+                    ));
+                }
+                r.runs
+            }
             Puntada::Relleno {
                 angulo,
                 separacion,
@@ -154,7 +200,8 @@ impl Objeto {
                 }
                 out
             }
-        })
+        };
+        Ok((runs, warning))
     }
 }
 
@@ -186,8 +233,13 @@ impl Proyecto {
             if !obj.visible {
                 continue;
             }
-            let tramos = match obj.tramos(aguja) {
-                Ok(t) => t,
+            let tramos = match obj.runs_with_warning(aguja) {
+                Ok((t, warning)) => {
+                    if let Some(w) = warning {
+                        avisos.push(format!("{}: {w}", obj.nombre));
+                    }
+                    t
+                }
                 Err(e) => {
                     avisos.push(format!("{}: {e}", obj.nombre));
                     continue;
@@ -258,6 +310,7 @@ mod tests {
             puntada,
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         }
     }
 
@@ -344,6 +397,7 @@ mod tests {
             puntada: preset_por_nombre("Relleno 45°"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
+            guides: vec![],
         });
         let g = p.generar();
         assert_eq!(g.avisos.len(), 1);

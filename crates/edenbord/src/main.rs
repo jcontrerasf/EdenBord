@@ -111,6 +111,8 @@ enum Tool {
     Ruler,
     /// Escribir: clic pone un texto nuevo (o edita uno) y se escribe en el lienzo.
     Texto,
+    /// Angle guides of an area satin: drag across the shape to add one.
+    Guides,
 }
 
 struct Editor {
@@ -494,6 +496,7 @@ impl Editor {
                 (Key::P, Tool::Pen),
                 (Key::R, Tool::Ruler),
                 (Key::T, Tool::Texto),
+                (Key::G, Tool::Guides),
             ]
             .into_iter()
             .find(|&(k, _)| i.consume_key(Modifiers::NONE, k))
@@ -556,7 +559,12 @@ impl Editor {
         if self.ruler.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.ruler = None;
         }
-        let delete = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete));
+        let delete = ctx.input_mut(|i| {
+            i.consume_key(Modifiers::NONE, Key::Delete)
+                || (self.tool == Tool::Guides
+                    && self.selected_guide.is_some()
+                    && i.consume_key(Modifiers::NONE, Key::Backspace))
+        });
         if save {
             if self.proyecto.is_some() {
                 self.save_project(false);
@@ -666,6 +674,8 @@ impl Editor {
             self.nodos_sel.clear();
         } else if escape && self.selected_guide.is_some() {
             self.selected_guide = None;
+        } else if escape && self.tool == Tool::Guides {
+            self.tool = Tool::Select;
         } else if escape {
             doc.seleccion.fill(false);
             self.fondo_sel = false;

@@ -147,6 +147,13 @@ impl Editor {
                     "Nodos (N) · arrastrar nodos y manijas · doble clic en el trazo: agregar \
                      nodo · Supr: borrar nodo",
                 ));
+                tools.push((
+                    Tool::Guides,
+                    iconos::GUIAS,
+                    "Guías (G) · satín de zona: arrastrar a través de la forma = guía nueva · \
+                     arrastrar un extremo o el medio = ajustarla · doble clic = enderezarla · \
+                     clic derecho o Supr = borrarla",
+                ));
                 tools.push((Tool::Pen, iconos::PLUMA, "Pluma (P) · calcar contornos"));
                 tools.push((
                     Tool::Texto,
@@ -183,6 +190,9 @@ impl Editor {
         }
         if tool != Tool::Texto {
             self.finish_text();
+        }
+        if tool != Tool::Guides {
+            self.selected_guide = None;
         }
         self.tool = tool;
     }

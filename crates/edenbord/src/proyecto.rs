@@ -663,6 +663,48 @@ impl ProyectoDoc {
             .min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)))
     }
 
+    /// A guide along the line through `a` and `b`, cut to the edges of object `i`: the stretch
+    /// of the line inside the shape that holds the middle of `a`–`b`, or the closest one.
+    /// `None` if the line doesn't cross the shape.
+    pub fn cut_across(&self, i: usize, a: Point, b: Point) -> Option<Guide> {
+        let d = b - a;
+        if d.hypot2() < 1e-12 {
+            return None;
+        }
+        // Crossings with the edges, as positions along the line (0 = a, 1 = b).
+        let mut ts: Vec<f64> = self.lineas[i]
+            .iter()
+            .flat_map(|pl| {
+                let n = pl.puntos.len();
+                (0..n).filter_map(move |k| {
+                    let (p, q) = (pl.puntos[k], pl.puntos[(k + 1) % n]);
+                    let e = q - p;
+                    let den = d.cross(e);
+                    if den.abs() < 1e-12 {
+                        return None;
+                    }
+                    let u = (p - a).cross(d) / den;
+                    (0.0..1.0).contains(&u).then(|| (p - a).cross(e) / den)
+                })
+            })
+            .collect();
+        ts.sort_by(f64::total_cmp);
+        ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+        // Even-odd: inside between the 1st and 2nd crossing, the 3rd and 4th…
+        let (t0, t1) = ts
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[p, q]| (p, q))
+            .min_by(|x, y| {
+                let off = |(p, q): (f64, f64)| (0.5 - q).max(p - 0.5).max(0.0);
+                off(*x)
+                    .total_cmp(&off(*y))
+                    .then((x.1 - x.0).total_cmp(&(y.1 - y.0)))
+            })?;
+        Some([a + d * t0, a + d * t1])
+    }
+
     /// A new guide through `p` inside area satin `i`: the stitch of its column nearest to `p`.
     pub fn guide_at(&self, i: usize, p: Point) -> Option<Guide> {
         let Puntada::AreaSatin { density, .. } = self.proyecto.objetos[i].puntada else {
@@ -845,6 +887,29 @@ mod tests {
             Some(2),
             "ni su borde"
         );
+    }
+
+    #[test]
+    fn a_stroke_across_is_cut_to_the_edges() {
+        // Square 30×30 with a 10×10 hole in the middle.
+        let d = doc();
+        let p = |x, y| Point::new(x, y);
+        // A short stroke inside the left band: extended to both edges of the band.
+        assert_eq!(
+            d.cut_across(0, p(3.0, 15.0), p(6.0, 15.0)),
+            Some([p(0.0, 15.0), p(10.0, 15.0)])
+        );
+        // From outside, stopping short of the band: the band it points to.
+        assert_eq!(
+            d.cut_across(0, p(15.0, -5.0), p(15.0, 3.0)),
+            Some([p(15.0, 0.0), p(15.0, 10.0)])
+        );
+        // The middle in the hole: the closest band.
+        assert_eq!(
+            d.cut_across(0, p(14.0, 15.0), p(17.0, 15.0)),
+            Some([p(20.0, 15.0), p(30.0, 15.0)])
+        );
+        assert_eq!(d.cut_across(0, p(-5.0, 40.0), p(5.0, 40.0)), None);
     }
 
     #[test]

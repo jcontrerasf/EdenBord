@@ -17,8 +17,61 @@ impl Editor {
                 Tool::Pen => self.ctx_pen(ui),
                 Tool::Ruler => self.ctx_ruler(ui),
                 Tool::Texto => self.ctx_text(ui),
+                Tool::Guides => self.ctx_guides(ui),
             }
         });
+    }
+
+    /// Guides tool: what to do, how many guides there are, and going back to the automatic ones
+    /// (or switching the object to area satin).
+    fn ctx_guides(&mut self, ui: &mut Ui) {
+        let Some(doc) = &mut self.proyecto else {
+            return;
+        };
+        let suave = |t: &str| RichText::new(t).color(tema::TEXTO_SUAVE);
+        let [i] = doc.selection()[..] else {
+            ui.label(suave(
+                "Elige una zona con un clic para ver y editar sus guías",
+            ));
+            return;
+        };
+        let obj = &doc.proyecto.objetos[i];
+        if obj.bloqueado {
+            ui.label(suave("El objeto está bloqueado"));
+            return;
+        }
+        if !obj.es_zona() {
+            ui.label(suave("Las guías son para zonas (contornos o textos)"));
+            return;
+        }
+        if !matches!(obj.puntada, bordado::Puntada::AreaSatin { .. }) {
+            ui.label(suave("Las guías giran las puntadas del satín de zona"));
+            if ui
+                .button(format!("{} Usar satín de zona", iconos::AREA_SATIN))
+                .clicked()
+            {
+                doc.edit(|p| p.objetos[i].puntada = bordado::preset_por_nombre("Satín de zona"));
+            }
+            return;
+        }
+        ui.label(suave(
+            "Arrastra a través de la forma para agregar una guía · arrastra un extremo o el \
+             medio para ajustarla · doble clic: enderezarla · clic derecho: borrarla",
+        ));
+        ui.separator();
+        let n = doc.guides[i].len();
+        let auto = obj.guides.is_empty();
+        let kind = if auto { "automáticas" } else { "propias" };
+        ui.label(suave(&format!("{n} guías {kind}")));
+        if !auto
+            && ui
+                .button(format!("{} Automáticas", iconos::AUTO_GUIDES))
+                .on_hover_text("Descarta las guías editadas y las calcula de nuevo según la forma")
+                .clicked()
+        {
+            doc.edit(|p| p.objetos[i].guides.clear());
+            self.selected_guide = None;
+        }
     }
 
     fn ctx_text(&mut self, ui: &mut Ui) {

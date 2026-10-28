@@ -136,10 +136,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   borda (aviso vía `Objeto::runs_with_warning`). Entre guías se interpola por largo de arco en
   ambos rieles (`columns` = pares izq/der) y se cose con `satin::sew` (lo mismo que el satín de
   línea); puntadas > 7 mm se parten escalonadas. `auto_guides`: extremos = par de puntos del
-  borde con menor ancho medio, lado recto en la punta → la guía va sobre él (`straight_end`),
+  borde con menor ancho medio (con la guía de cada punta cortada sobre el corte, ver `cut`),
   correspondencia densa con DTW, simplificada (0,4 mm) y con guías al menos cada 10 mm.
   `Objeto::area_guides()` = las propias o las automáticas. Formas con ramas (h, k) o colas (e)
-  salen mal: separarlas.
+  salen mal: separarlas. Puntas cortadas (`cut`): tramos rectos del borde (`stretches`) cerca
+  de la punta, de largo ≤ 2 anchos y a menos de ~45° de un peldaño cercano; el más alineado es
+  la guía del extremo (sirve con cortes en diagonal y con la punta en una esquina).
 - `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible,
   bloqueado}` (`bloqueado` solo se escribe si es `true`). Imagen para calcar; no se borda. Ruta
   relativa = desde la carpeta del `.edenbord`.
@@ -207,7 +209,7 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   Supr = borrar (mínimo 3 cerrado / 2 abierto), "Esquina ↔ curva". Textos: "Convertir en
   trazado".
 - Atajos (`shortcuts`, `clipboard_shortcuts`; no corren si un campo tiene el foco ni mientras
-  se escribe un texto en el lienzo): S/N/P/R/T herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
+  se escribe un texto en el lienzo): S/N/P/R/T/G herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
   puntero), Ctrl+Shift+V (en el mismo lugar, vía `ViewportCommand::RequestPaste`), Ctrl+D,
   Ctrl+A, Esc, Supr (objetos, nodos o el fondo elegido), flechas.
 - Hay a lo sumo un documento abierto: `Editor.doc` (JEF) **o** `Editor.proyecto`. Abrir decide
@@ -239,13 +241,18 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - Manija del ángulo del relleno (`Pick::Angulo`, `Gesto::Angulo`): con un solo objeto con
   `Puntada::angulo()`, una línea desde el centro; arrastrarla cambia el ángulo en vivo
   (`edit_grouped`), Shift = de a 15°, Esc deshace. `gestos::angulo_filas` (en (−90, 90]).
-- Guías del satín de zona en el lienzo (Seleccionar, un solo objeto `AreaSatin` no bloqueado;
-  `guide_handles`, en caché en `ProyectoDoc.guides`, punteadas si son automáticas): arrastrar
-  un extremo (`Pick::Guide`, `Gesto::Guide`, en vivo y pegado al borde con
-  `nearest_edge_point`; Esc deshace), doble clic dentro = guía nueva (`guide_at`: la puntada
-  más cercana), clic en una guía la elige (`Editor.selected_guide`) y Supr la borra.
-  `edit_guides` copia antes las automáticas al objeto. Panel: «Automáticas» las descarta.
-  Separar y booleanas borran las guías; combinar las junta.
+- Herramienta Guías (`Tool::Guides`, G; `canvas/guias.rs`): con un solo objeto `AreaSatin` no
+  bloqueado (`guide_handles`, en caché en `ProyectoDoc.guides`) muestra solo sus guías, sin
+  marco (punteadas si son automáticas). Arrastrar a través de la forma = guía nueva
+  (`Gesto::NewGuide`, Shift de a 15°; al soltar `cut_across` corta la recta en los bordes: el
+  tramo de adentro que contiene el medio del trazo, o el más cercano). Arrastrar un extremo
+  (`GuideDrag::End`, pegado al borde con `nearest_edge_point`) o el medio (`GuideDrag::Slide`,
+  misma inclinación por el puntero), en vivo con `edit_grouped`; Esc deshace. Doble clic =
+  enderezarla (`guide_at`, la puntada más cercana); clic derecho = borrar; clic la elige
+  (`Editor.selected_guide`) y Supr/Retroceso la borra; clic en otro objeto lo elige; Esc sin
+  nada elegido vuelve a Seleccionar. `edit_guides` copia antes las automáticas al objeto.
+  Barra contextual: ayuda, cantidad, «Automáticas» o «Usar satín de zona». Separar y booleanas
+  borran las guías; combinar las junta.
 - Con varios objetos seleccionados, el panel edita los parámetros del primero y los aplica con
   `copiar_cambios` a los del mismo tipo; el selector de color pinta toda la selección si el
   objeto elegido es parte de ella.

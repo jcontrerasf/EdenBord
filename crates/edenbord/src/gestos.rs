@@ -51,14 +51,35 @@ pub enum Gesto {
         /// El ángulo al empezar: si cambió, cancelar deshace la edición.
         inicial: f64,
     },
-    /// Dragging end `end` (0 or 1) of angle guide `guide` of area satin `obj`. Applied live,
-    /// snapped to the shape's edge; `changed`: cancelling has to undo it.
+    /// Dragging angle guide `guide` of area satin `obj` (see [`GuideDrag`]). Applied live;
+    /// `changed`: cancelling has to undo it.
     Guide {
         obj: usize,
         guide: usize,
-        end: usize,
+        drag: GuideDrag,
         changed: bool,
     },
+    /// Drawing a new angle guide across area satin `obj`, from `a` to `b` (mm). Added on
+    /// release, cut to the edges of the shape.
+    NewGuide { obj: usize, a: Point, b: Point },
+}
+
+/// What dragging an angle guide does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GuideDrag {
+    /// Moves one end (0 or 1) along the edge.
+    End(usize),
+    /// Slides the whole guide, keeping its slant (radians).
+    Slide { angle: f64 },
+}
+
+/// `b` moved so that the direction from `a` is a multiple of `step` degrees.
+pub fn snap_angle(a: Point, b: Point, step: f64) -> Point {
+    let v = b - a;
+    let step = step.to_radians();
+    let ang = (v.y.atan2(v.x) / step).round() * step;
+    let dir = Vec2::new(ang.cos(), ang.sin());
+    a + dir * v.dot(dir)
 }
 
 /// Modificadores que cambian el gesto.
@@ -95,6 +116,13 @@ impl Gesto {
             }
             // Needs the shape to snap to: the canvas does it.
             Gesto::Guide { .. } => {}
+            Gesto::NewGuide { a, b, .. } => {
+                *b = if mods.shift {
+                    snap_angle(*a, hasta, GIRO_PASO)
+                } else {
+                    hasta
+                };
+            }
         }
     }
 }

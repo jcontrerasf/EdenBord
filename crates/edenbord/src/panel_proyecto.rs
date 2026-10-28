@@ -720,8 +720,8 @@ fn guides_row(ui: &mut egui::Ui, obj: &mut Objeto, count: usize) {
         let kind = if auto { "automáticas" } else { "propias" };
         ui.label(format!("Guías de ángulo: {count} {kind}"))
             .on_hover_text(
-                "Arrastra los extremos de una guía para girar las puntadas; doble clic dentro de \
-                 la forma agrega una; clic en una guía y Supr la borra",
+                "Se ven y se editan con la herramienta Guías (G): arrastrar a través de la forma \
+                 agrega una; los extremos y el medio se arrastran",
             );
         if !auto
             && ui

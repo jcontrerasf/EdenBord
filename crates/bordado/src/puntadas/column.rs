@@ -22,10 +22,14 @@ pub type Guide = [Point; 2];
 
 /// Satin stitches longer than this are split in staggered pieces so they don't snag.
 const MAX_STITCH: f64 = 7.0;
-/// How far (mm) a polyline may stray from its chord and still count as straight, and how many
-/// points are looked at.
+/// How far (mm) the edge may stray from a chord and still count as straight, and the shortest
+/// straight stretch that can be a cut.
 const STRAIGHT_TOL: f64 = 0.05;
-const STRAIGHT_POINTS: usize = 200;
+const MIN_STRETCH: f64 = 0.3;
+/// A straight stretch is a cut across the column if it is within ~45° of a rung near the tip.
+const CUT_COS: f64 = 0.7;
+/// Longest cut, in widths of the column measured a little into it (the tip may be narrower).
+const MAX_CUT: f64 = 2.0;
 /// Candidate positions per ring when looking for the two ends of a column.
 const END_CANDIDATES: usize = 48;
 /// Samples per rail when comparing candidate ends.
@@ -469,66 +473,106 @@ fn auto_single(ring: &Ring) -> Vec<Guide> {
         }
     }
     let (_, p, q) = best;
-    let la = ring.fwd(p, q);
-    let lb = len - la;
-    // Over a straight end the end guide goes along it, instead of a fan from the tip.
-    let (rail_a, rail_b) = (ring.walk(p, la), ring.walk_back(p, lb));
-    let (a0, b0) = straight_end(&rail_a, &rail_b);
-    let (rev_a, rev_b): (Vec<Point>, Vec<Point>) = (
-        rail_a.iter().rev().copied().collect(),
-        rail_b.iter().rev().copied().collect(),
-    );
-    let (a1, b1) = straight_end(&rev_a, &rev_b);
-    // Both ends on the same straight side (a fat shape): no straight ends then.
-    let (a0, b0, a1, b1) = if a0 + a1 >= la - EPS || b0 + b1 >= lb - EPS {
-        (0.0, 0.0, 0.0, 0.0)
-    } else {
-        (a0, b0, a1, b1)
-    };
-    let (la, lb) = (la - a0 - a1, lb - b0 - b1);
-    let a = Arco::new(&ring.walk(p + a0, la));
-    let b = Arco::new(&ring.walk_back(p - b0, lb));
+    // Over a straight end (a cut) the end guide goes along it, instead of a fan from the tip.
+    let straight = stretches(ring);
+    let (mut a0, mut b0) = (p, p);
+    let (mut a1, mut b1) = (q, q);
+    if let Some((s0, s1)) = cut(ring, &straight, p, q, true) {
+        (a0, b0) = (s1, s0);
+    }
+    if let Some((s0, s1)) = cut(ring, &straight, q, p, false) {
+        (a1, b1) = (s0, s1);
+    }
+    // Going forward: a0, a1, b1, b0, all the way around once; if not, the cuts overlap.
+    let around = ring.fwd(a0, a1) + ring.fwd(a1, b1) + ring.fwd(b1, b0) + ring.fwd(b0, a0);
+    if (around - len).abs() > EPS * len.max(1.0) * 10.0 {
+        (a0, b0, a1, b1) = (p, p, q, q);
+    }
+    let (la, lb) = (ring.fwd(a0, a1), ring.fwd(b1, b0));
+    let a = Arco::new(&ring.walk(a0, la));
+    let b = Arco::new(&ring.walk_back(b0, lb));
     simplify(&match_rails(&a, &b, len), tolerance(len))
         .into_iter()
         .map(|(sa, sb)| [a.en(sa).0, b.en(sb).0])
         .collect()
 }
 
-/// How much of each rail the end guide takes, at the tip where both rails start. In the middle
-/// of a straight end, all of it; at a square corner, the shorter side; at a pointed or round
-/// tip, nothing (the stitches fan out from the tip).
-fn straight_end(a: &[Point], b: &[Point]) -> (f64, f64) {
-    if a.len() < 2 || b.len() < 2 {
-        return (0.0, 0.0);
-    }
-    let (ra, rb) = (straight_run(a), straight_run(b));
-    let cos = unitario(a[1] - a[0]).dot(unitario(b[1] - b[0]));
-    if cos < -0.99 && ra.min(rb) > EPS {
-        (ra, rb)
-    } else if cos.abs() < 0.7 && ra.min(rb) > EPS {
-        if ra < rb { (ra, 0.0) } else { (0.0, rb) }
+/// The straight cut at tip `tip` (the column runs towards `other`), as the positions where it
+/// starts and ends going forward: the straight stretch of the edge near the tip that goes most
+/// across the column, if one does. `None` for pointed and round tips (the stitches fan out).
+fn cut(
+    ring: &Ring,
+    straight: &[(f64, f64)],
+    tip: f64,
+    other: f64,
+    forward_is_a: bool,
+) -> Option<(f64, f64)> {
+    let len = ring.len();
+    let (la, lb) = if forward_is_a {
+        (ring.fwd(tip, other), ring.fwd(other, tip))
     } else {
-        (0.0, 0.0)
-    }
+        (ring.fwd(other, tip), ring.fwd(tip, other))
+    };
+    // A rung a little into the column: its width, and a cut goes across like it.
+    let (fa, fb) = if forward_is_a {
+        (1.0, -1.0)
+    } else {
+        (-1.0, 1.0)
+    };
+    let rung = |t: f64| (ring.at(tip + fa * t * la), ring.at(tip + fb * t * lb));
+    let (x, y) = rung(0.1);
+    let width = x.distance(y).max(EPS);
+    let (x, y) = rung((1.5 * width / la.max(lb)).min(0.3));
+    let across = unitario(x - y);
+    let near = |s: f64| ring.fwd(tip, s).min(ring.fwd(s, tip)) <= width;
+    straight
+        .iter()
+        .filter(|&&(s0, l)| {
+            // Near the tip, or with the tip in the middle.
+            l <= MAX_CUT * width && (near(s0) || near(s0 + l) || ring.fwd(s0, tip) <= l)
+        })
+        .map(|&(s0, l)| {
+            let along = unitario(ring.at(s0 + l) - ring.at(s0));
+            (along.dot(across).abs(), s0, l)
+        })
+        .filter(|&(c, _, _)| c > CUT_COS)
+        .max_by(|x, y| x.0.total_cmp(&y.0))
+        .map(|(_, s0, l)| (s0.rem_euclid(len), (s0 + l).rem_euclid(len)))
 }
 
-/// Length of the straight stretch at the start of a polyline.
-fn straight_run(pts: &[Point]) -> f64 {
-    let mut len = 0.0;
-    let mut best = 0.0;
-    for k in 1..pts.len().min(STRAIGHT_POINTS) {
-        len += pts[k - 1].distance(pts[k]);
-        let (p0, pk) = (pts[0], pts[k]);
-        let dir = unitario(pk - p0);
-        if pts[1..k]
-            .iter()
-            .any(|&q| (q - p0).cross(dir).abs() > STRAIGHT_TOL)
-        {
-            break;
+/// The straight stretches of a ring (at least [`MIN_STRETCH`] long), as (start, length).
+fn stretches(ring: &Ring) -> Vec<(f64, f64)> {
+    let n = ring.pts.len();
+    // Start at the sharpest vertex, so no stretch goes around the start.
+    let turn = |i: usize| {
+        let (u, v) = (
+            ring.pts[i] - ring.pts[(i + n - 1) % n],
+            ring.pts[(i + 1) % n] - ring.pts[i],
+        );
+        u.cross(v).atan2(u.dot(v)).abs()
+    };
+    let start = (0..n)
+        .max_by(|&i, &j| turn(i).total_cmp(&turn(j)))
+        .unwrap_or(0);
+    let pos = |k: usize| ring.cum[(start + k) % n] + if start + k >= n { ring.len() } else { 0.0 };
+    let pt = |k: usize| ring.pts[(start + k) % n];
+    let mut out = vec![];
+    let mut from = 0;
+    for k in 1..=n {
+        let fits = |to: usize| {
+            let dir = unitario(pt(to) - pt(from));
+            (from + 1..to).all(|m| (pt(m) - pt(from)).cross(dir).abs() <= STRAIGHT_TOL)
+        };
+        if !fits(k) {
+            out.push((from, k - 1));
+            from = k - 1;
         }
-        best = len;
     }
-    best
+    out.push((from, n));
+    out.into_iter()
+        .map(|(i, j)| (pos(i), pos(j) - pos(i)))
+        .filter(|&(_, l)| l >= MIN_STRETCH)
+        .collect()
 }
 
 /// Automatic guides of a part with one hole: starts at the closest points of both edges and
@@ -772,6 +816,41 @@ mod tests {
             .min_by(|x, y| (x.0.x.abs() + x.1.x.abs()).total_cmp(&(y.0.x.abs() + y.1.x.abs())))
             .unwrap();
         assert!((angle(top.0, top.1) - 90.0).abs() < 5.0, "{top:?}");
+    }
+
+    /// Whether segments `p` and `q` cross (touching at an end doesn't count).
+    fn cross(p: (Point, Point), q: (Point, Point)) -> bool {
+        let side = |a: Point, b: Point, c: Point| (b - a).cross(c - a);
+        let (d1, d2) = (side(q.0, q.1, p.0), side(q.0, q.1, p.1));
+        let (d3, d4) = (side(p.0, p.1, q.0), side(p.0, p.1, q.1));
+        d1 * d2 < -1e-9 && d3 * d4 < -1e-9
+    }
+
+    #[test]
+    fn slanted_cuts_are_the_ends() {
+        // A polygonal «C» with both ends cut on a slant.
+        let d = "M25,-25 L8,-28.8 L-3,-25.5 L-14,-19.5 L-21.5,-12 L-26,-2 L-26.5,5 L-24,18 \
+                 L-14,27 L2,28 L16,24.5 L18.5,12.3 L9,16.5 L2,17.5 L-7,16 L-11,9 L-11.5,-2 \
+                 L-7,-11 L0,-16.5 L8,-18.7 L16,-17.2 L23,-13.7 Z";
+        let guides = auto_guides(&rings(d));
+        let is_cut = |g: &Guide, x: Point, y: Point| {
+            let close = |p: Point, q: Point| p.distance(q) < 0.1;
+            (close(g[0], x) && close(g[1], y)) || (close(g[0], y) && close(g[1], x))
+        };
+        let (top, bottom) = (
+            (Point::new(25.0, -25.0), Point::new(23.0, -13.7)),
+            (Point::new(16.0, 24.5), Point::new(18.5, 12.3)),
+        );
+        let (first, last) = (guides[0], guides[guides.len() - 1]);
+        assert!(
+            (is_cut(&first, top.0, top.1) && is_cut(&last, bottom.0, bottom.1))
+                || (is_cut(&first, bottom.0, bottom.1) && is_cut(&last, top.0, top.1)),
+            "{guides:?}"
+        );
+        let pairs = column_pairs(d, &[]);
+        for w in pairs.windows(2) {
+            assert!(!cross(w[0], w[1]), "{:?}", w);
+        }
     }
 
     #[test]

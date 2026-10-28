@@ -39,6 +39,7 @@ pub const SELECCIONAR: &str = "\u{E1DC}"; // cursor
 pub const NODOS: &str = "\u{EB00}"; // bezier-curve
 pub const PLUMA: &str = "\u{E3AC}"; // pen-nib
 pub const REGLA: &str = "\u{E6B8}"; // ruler
+pub const GUIAS: &str = "\u{E6D2}"; // line-segment
 pub const CUADRICULA: &str = "\u{E296}"; // grid-four
 pub const AJUSTAR: &str = "\u{E1D0}"; // corners-out
 

@@ -30,11 +30,22 @@ pub struct ProyectoDoc {
     pub relleno_guias: Vec<Vec<[Point; 4]>>,
     /// Angle guides of each area satin (its own or the automatic ones); empty for the rest.
     pub guides: Vec<Vec<Guide>>,
+    /// Cuts of each area satin (its own or the automatic ones); empty for the rest.
+    pub cuts: Vec<Vec<Guide>>,
     /// Versiones anteriores y siguientes, cada una con su selección.
     undo: Vec<(Proyecto, Vec<bool>)>,
     redo: Vec<(Proyecto, Vec<bool>)>,
     /// Clave de la última edición agrupada (ver [`ProyectoDoc::edit_grouped`]).
     last_key: Option<String>,
+}
+
+/// The two kinds of lines of an area satin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+    /// Angle guide: the stitches turn to follow it.
+    Guide,
+    /// Cut: splits the shape in columns.
+    Cut,
 }
 
 impl ProyectoDoc {
@@ -50,6 +61,7 @@ impl ProyectoDoc {
             lineas: vec![],
             relleno_guias: vec![],
             guides: vec![],
+            cuts: vec![],
             undo: vec![],
             redo: vec![],
             last_key: None,
@@ -171,15 +183,15 @@ impl ProyectoDoc {
                 }
             })
             .collect();
-        self.guides = self
+        (self.guides, self.cuts) = self
             .proyecto
             .objetos
             .iter()
             .map(|o| match o.puntada {
-                Puntada::AreaSatin { .. } => o.area_guides(),
-                _ => vec![],
+                Puntada::AreaSatin { .. } => (o.area_guides(), o.area_cuts()),
+                _ => (vec![], vec![]),
             })
-            .collect();
+            .unzip();
         self.seleccion.resize(self.proyecto.objetos.len(), false);
     }
 
@@ -376,14 +388,18 @@ impl ProyectoDoc {
         let (first, rest) = (*first, rest.to_vec());
         self.edit(|p| {
             let mut extra = Vec::new();
-            let mut guides = Vec::new();
+            // Guides of their own of any of them are kept; if none had, still automatic.
+            let mut guides = p.objetos[first].guides.take();
             for &i in &rest {
                 if let Forma::Contorno { d } = &p.objetos[i].forma {
                     extra.extend(d.elements().iter().copied());
                 }
-                guides.extend_from_slice(&p.objetos[i].guides);
+                if let Some(g) = &p.objetos[i].guides {
+                    guides.get_or_insert_default().extend_from_slice(g);
+                }
             }
-            p.objetos[first].guides.extend(guides);
+            p.objetos[first].guides = guides;
+            p.objetos[first].cuts = None;
             if let Forma::Contorno { d } = &mut p.objetos[first].forma {
                 for el in extra {
                     d.push(el);
@@ -436,7 +452,8 @@ impl ProyectoDoc {
                             Forma::Linea { .. } => Forma::Linea { d },
                             _ => Forma::Contorno { d },
                         },
-                        guides: vec![],
+                        guides: None,
+                        cuts: None,
                         ..original.clone()
                     })
                     .collect();
@@ -483,7 +500,8 @@ impl ProyectoDoc {
         self.edit(|p| {
             p.objetos[first].forma = Forma::Contorno { d };
             // A new shape: its own guides would no longer fit.
-            p.objetos[first].guides.clear();
+            p.objetos[first].guides = None;
+            p.objetos[first].cuts = None;
             if op != Booleana::Restar {
                 let mut i = 0;
                 p.objetos.retain(|_| {
@@ -633,17 +651,51 @@ impl ProyectoDoc {
         let mut guides = self.guides[i].clone();
         f(&mut guides);
         let guides: Vec<[[f64; 2]; 2]> = guides.iter().map(|g| g.map(|p| [p.x, p.y])).collect();
-        let apply = |p: &mut Proyecto| p.objetos[i].guides = guides;
+        let apply = |p: &mut Proyecto| p.objetos[i].guides = Some(guides);
         match key {
             Some(key) => self.edit_grouped(key, apply),
             None => self.edit(apply),
         }
     }
 
-    pub fn remove_guide(&mut self, i: usize, guide: usize) {
-        if self.guides.get(i).is_some_and(|g| guide < g.len()) {
-            self.edit_guides(i, None, |g| {
-                g.remove(guide);
+    /// Edits the cuts of object `i`, like [`edit_guides`](Self::edit_guides): automatic cuts
+    /// become its own first.
+    pub fn edit_cuts(&mut self, i: usize, key: Option<String>, f: impl FnOnce(&mut Vec<Guide>)) {
+        let mut cuts = self.cuts[i].clone();
+        f(&mut cuts);
+        let cuts: Vec<[[f64; 2]; 2]> = cuts.iter().map(|g| g.map(|p| [p.x, p.y])).collect();
+        let apply = |p: &mut Proyecto| p.objetos[i].cuts = Some(cuts);
+        match key {
+            Some(key) => self.edit_grouped(key, apply),
+            None => self.edit(apply),
+        }
+    }
+
+    /// The guides or the cuts of object `i`.
+    pub fn lines(&self, i: usize, kind: LineKind) -> &[Guide] {
+        match kind {
+            LineKind::Guide => &self.guides[i],
+            LineKind::Cut => &self.cuts[i],
+        }
+    }
+
+    pub fn edit_lines(
+        &mut self,
+        i: usize,
+        kind: LineKind,
+        key: Option<String>,
+        f: impl FnOnce(&mut Vec<Guide>),
+    ) {
+        match kind {
+            LineKind::Guide => self.edit_guides(i, key, f),
+            LineKind::Cut => self.edit_cuts(i, key, f),
+        }
+    }
+
+    pub fn remove_line(&mut self, i: usize, kind: LineKind, k: usize) {
+        if i < self.guides.len() && k < self.lines(i, kind).len() {
+            self.edit_lines(i, kind, None, |g| {
+                g.remove(k);
             });
         }
     }
@@ -711,7 +763,7 @@ impl ProyectoDoc {
             return None;
         };
         let rings: Vec<Vec<Point>> = self.lineas[i].iter().map(|pl| pl.puntos.clone()).collect();
-        bordado::puntadas::columns(&rings, &self.guides[i], density)
+        bordado::puntadas::columns(&rings, Some(&self.guides[i]), &self.cuts[i], density)
             .into_iter()
             .flatten()
             .flatten()
@@ -819,7 +871,8 @@ mod tests {
             puntada,
             opacidad: bordado::OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         };
         let mut p = Proyecto::default();
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.
@@ -913,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_a_guide_keeps_the_automatic_ones() {
+    fn editing_guides_by_hand() {
         let mut d = doc();
         d.edit(|p| {
             p.objetos[0].forma = Forma::Contorno {
@@ -922,26 +975,33 @@ mod tests {
             p.objetos[0].puntada = bordado::preset_por_nombre("Satín de zona");
         });
         let auto = d.guides[0].clone();
-        assert!(auto.len() >= 2 && d.proyecto.objetos[0].guides.is_empty());
+        assert!(auto.len() >= 2 && d.proyecto.objetos[0].guides.is_none());
         assert!(d.guides[1].is_empty(), "only area satins have guides");
 
         // Moving one end turns the automatic guides into the object's own.
         let q = d.nearest_edge_point(0, Point::new(12.0, -3.0)).unwrap();
         assert_eq!(q, Point::new(12.0, 0.0));
         d.edit_guides(0, None, |g| g[1][0] = q);
-        assert_eq!(d.proyecto.objetos[0].guides.len(), auto.len());
+        assert_eq!(
+            d.proyecto.objetos[0].guides.as_ref().unwrap().len(),
+            auto.len()
+        );
         assert_eq!(d.guides[0][1][0], q);
 
-        // A new guide where the column is; deleting all of them goes back to automatic.
+        // A new guide where the column is; deleting all of them leaves none (by hand), and
+        // the column is still sewn from its automatic ends.
         let g = d.guide_at(0, Point::new(20.0, 2.0)).unwrap();
         assert!(
             (g[0].x - 20.0).abs() < 1.0 && (g[0].y - g[1].y).abs() > 3.9,
             "{g:?}"
         );
         for _ in 0..auto.len() {
-            d.remove_guide(0, 0);
+            d.remove_line(0, LineKind::Guide, 0);
         }
-        assert!(d.proyecto.objetos[0].guides.is_empty());
+        assert_eq!(d.proyecto.objetos[0].guides, Some(vec![]));
+        assert!(d.guides[0].is_empty());
+        assert!(!d.generado.jef.stitches.is_empty());
+        d.edit(|p| p.objetos[0].guides = None);
         assert_eq!(d.guides[0], auto);
     }
 

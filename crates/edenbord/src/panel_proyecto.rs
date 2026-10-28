@@ -195,7 +195,8 @@ impl Editor {
             puntada: Puntada::Ninguna,
             opacidad: bordado::OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         }]);
         self.pen = Default::default();
     }
@@ -653,7 +654,7 @@ fn properties_section(
     }
     puntada_params(ui, &mut obj.puntada);
     if matches!(obj.puntada, Puntada::AreaSatin { .. }) {
-        guides_row(ui, &mut obj, doc.guides[i].len());
+        guides_row(ui, &mut obj, doc.guides[i].len(), doc.cuts[i].len());
     }
     if let Forma::Texto {
         texto,
@@ -712,16 +713,17 @@ fn properties_section(
     font
 }
 
-/// Angle guides of an area satin: how many there are, whether they are automatic, and a
-/// button to go back to the automatic ones.
-fn guides_row(ui: &mut egui::Ui, obj: &mut Objeto, count: usize) {
+/// Angle guides of an area satin: how many there are (and cuts), whether they are automatic,
+/// and a button to go back to the automatic ones.
+fn guides_row(ui: &mut egui::Ui, obj: &mut Objeto, count: usize, cuts: usize) {
     ui.horizontal(|ui| {
-        let auto = obj.guides.is_empty();
+        let auto = obj.guides.is_none();
         let kind = if auto { "automáticas" } else { "propias" };
-        ui.label(format!("Guías de ángulo: {count} {kind}"))
+        ui.label(format!("Guías de ángulo: {count} {kind} · cortes: {cuts}"))
             .on_hover_text(
                 "Se ven y se editan con la herramienta Guías (G): arrastrar a través de la forma \
-                 agrega una; los extremos y el medio se arrastran",
+                 agrega una guía (o un corte, que parte la forma en columnas); los extremos y el \
+                 medio se arrastran",
             );
         if !auto
             && ui
@@ -729,7 +731,7 @@ fn guides_row(ui: &mut egui::Ui, obj: &mut Objeto, count: usize) {
                 .on_hover_text("Descarta las guías editadas y las calcula de nuevo según la forma")
                 .clicked()
         {
-            obj.guides.clear();
+            obj.guides = None;
         }
     });
 }

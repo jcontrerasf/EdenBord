@@ -45,7 +45,8 @@ fn objeto(nombre: &str, color: i32, forma: Forma, puntada: Puntada) -> Objeto {
         puntada,
         opacidad: OPACIDAD_GUIA,
         bloqueado: false,
-        guides: vec![],
+        guides: None,
+        cuts: None,
     }
 }
 

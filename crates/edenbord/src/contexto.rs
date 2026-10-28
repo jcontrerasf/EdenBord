@@ -54,22 +54,64 @@ impl Editor {
             }
             return;
         }
+        use crate::proyecto::LineKind;
+        ui.label(suave("Dibujar:"));
+        ui.selectable_value(&mut self.guide_kind, LineKind::Guide, "Guía")
+            .on_hover_text("Las puntadas giran para seguir las guías");
+        ui.selectable_value(&mut self.guide_kind, LineKind::Cut, "Corte")
+            .on_hover_text(
+                "Los cortes parten la forma en columnas, cada una bordada aparte \
+                 (letras con ramas: H, T, E, K)",
+            );
         ui.label(suave(
-            "Arrastra a través de la forma para agregar una guía · arrastra un extremo o el \
-             medio para ajustarla · doble clic: enderezarla · clic derecho: borrarla",
+            "· arrastra a través de la forma (Ctrl: lo otro) · arrastra un extremo o el medio \
+             para ajustar · doble clic: enderezar · clic derecho: borrar",
         ));
         ui.separator();
-        let n = doc.guides[i].len();
-        let auto = obj.guides.is_empty();
+        let auto = obj.guides.is_none();
         let kind = if auto { "automáticas" } else { "propias" };
-        ui.label(suave(&format!("{n} guías {kind}")));
+        ui.label(suave(&format!("{} guías {kind}", doc.guides[i].len())));
         if !auto
             && ui
                 .button(format!("{} Automáticas", iconos::AUTO_GUIDES))
                 .on_hover_text("Descarta las guías editadas y las calcula de nuevo según la forma")
                 .clicked()
         {
-            doc.edit(|p| p.objetos[i].guides.clear());
+            doc.edit(|p| p.objetos[i].guides = None);
+            self.selected_guide = None;
+        }
+        if !doc.guides[i].is_empty()
+            && ui
+                .button("Sin guías")
+                .on_hover_text(
+                    "Borra todas las guías para ponerlas a mano. Mientras una columna no tenga \
+                     dos, sus extremos se buscan solos",
+                )
+                .clicked()
+        {
+            doc.edit(|p| p.objetos[i].guides = Some(vec![]));
+            self.selected_guide = None;
+        }
+        ui.separator();
+        let own_cuts = doc.proyecto.objetos[i].cuts.is_some();
+        let kind = if own_cuts { "propios" } else { "automáticos" };
+        ui.label(suave(&format!("{} cortes {kind}", doc.cuts[i].len())));
+        if own_cuts
+            && ui
+                .button(format!("{} Cortes automáticos", iconos::AUTO_GUIDES))
+                .on_hover_text("Descarta los cortes editados y los busca de nuevo en las esquinas")
+                .clicked()
+        {
+            doc.edit(|p| p.objetos[i].cuts = None);
+            self.selected_guide = None;
+        }
+        if !doc.cuts[i].is_empty()
+            && ui
+                .button("Sin cortes")
+                .on_hover_text("Borra todos los cortes: cada parte de la forma es una columna")
+                .clicked()
+        {
+            doc.edit(|p| p.objetos[i].cuts = Some(vec![]));
             self.selected_guide = None;
         }
     }

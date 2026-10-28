@@ -4,6 +4,8 @@
 
 use kurbo::{Affine, Point, Rect, Vec2};
 
+use crate::proyecto::LineKind;
+
 /// Tamaño mínimo (mm) al que se puede achicar con una manija.
 const MIN_MM: f64 = 0.5;
 /// Paso del giro con Shift, en grados.
@@ -51,17 +53,23 @@ pub enum Gesto {
         /// El ángulo al empezar: si cambió, cancelar deshace la edición.
         inicial: f64,
     },
-    /// Dragging angle guide `guide` of area satin `obj` (see [`GuideDrag`]). Applied live;
-    /// `changed`: cancelling has to undo it.
+    /// Dragging angle guide or cut `guide` of area satin `obj` (see [`GuideDrag`]). Applied
+    /// live; `changed`: cancelling has to undo it.
     Guide {
         obj: usize,
+        kind: LineKind,
         guide: usize,
         drag: GuideDrag,
         changed: bool,
     },
-    /// Drawing a new angle guide across area satin `obj`, from `a` to `b` (mm). Added on
-    /// release, cut to the edges of the shape.
-    NewGuide { obj: usize, a: Point, b: Point },
+    /// Drawing a new angle guide or cut across area satin `obj`, from `a` to `b` (mm). Added
+    /// on release, cut to the edges of the shape.
+    NewGuide {
+        obj: usize,
+        kind: LineKind,
+        a: Point,
+        b: Point,
+    },
 }
 
 /// What dragging an angle guide does.

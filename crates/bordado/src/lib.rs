@@ -61,23 +61,28 @@ impl Objeto {
         self.runs_with_warning(desde).map(|(runs, _)| runs)
     }
 
-    /// The angle guides of an area satin: its own, or the automatic ones if it has none.
+    /// The angle guides of an area satin: its own, or the automatic ones.
     pub fn area_guides(&self) -> Vec<puntadas::Guide> {
-        if !self.guides.is_empty() {
-            return self.own_guides();
+        match &self.guides {
+            Some(guides) => points(guides),
+            None => puntadas::auto_guides(&self.rings(), &self.area_cuts()),
         }
+    }
+
+    /// The cuts that split an area satin in columns: its own, or the automatic ones.
+    pub fn area_cuts(&self) -> Vec<puntadas::Guide> {
+        match &self.cuts {
+            Some(cuts) => points(cuts),
+            None => puntadas::auto_cuts(&self.rings()),
+        }
+    }
+
+    /// The closed rings of the shape (mm); none if it can't be drawn.
+    fn rings(&self) -> Vec<Vec<Point>> {
         let Ok(d) = self.trazado() else {
             return vec![];
         };
-        let rings: Vec<Vec<Point>> = polilineas(&d).into_iter().map(|pl| pl.puntos).collect();
-        puntadas::auto_guides(&rings)
-    }
-
-    fn own_guides(&self) -> Vec<puntadas::Guide> {
-        self.guides
-            .iter()
-            .map(|[a, b]| [Point::new(a[0], a[1]), Point::new(b[0], b[1])])
-            .collect()
+        polilineas(&d).into_iter().map(|pl| pl.puntos).collect()
     }
 
     /// Like [`tramos`](Self::tramos), plus a warning when part of the object can't be sewn.
@@ -116,10 +121,12 @@ impl Objeto {
             } => {
                 let r = puntadas::area_satin(
                     &anillos(),
-                    &self.own_guides(),
+                    self.guides.as_deref().map(points).as_deref(),
+                    &self.area_cuts(),
                     density,
                     base,
                     compensation,
+                    desde,
                 );
                 if r.skipped > 0 {
                     warning = Some(format!(
@@ -295,6 +302,14 @@ fn stitch((x, y): (i32, i32), kind: StitchKind) -> Stitch {
     Stitch { x, y, kind }
 }
 
+/// Segments saved as `[[x, y], [x, y]]` (mm), as points.
+fn points(segments: &[[[f64; 2]; 2]]) -> Vec<puntadas::Guide> {
+    segments
+        .iter()
+        .map(|[a, b]| [Point::new(a[0], a[1]), Point::new(b[0], b[1])])
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +325,8 @@ mod tests {
             puntada,
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         }
     }
 
@@ -397,7 +413,8 @@ mod tests {
             puntada: preset_por_nombre("Relleno 45°"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         });
         let g = p.generar();
         assert_eq!(g.avisos.len(), 1);

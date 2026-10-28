@@ -123,7 +123,8 @@ fn objeto(p: &usvg::Path, n: usize) -> Option<Objeto> {
         puntada: Puntada::Ninguna,
         opacidad: OPACIDAD_GUIA,
         bloqueado: false,
-        guides: vec![],
+        guides: None,
+        cuts: None,
     })
 }
 

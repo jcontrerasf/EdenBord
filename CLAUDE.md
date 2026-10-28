@@ -96,9 +96,12 @@ bastidor. El orden de `objetos` es el orden de bordado. Los proyectos antiguos (
 ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto literal.
 
 - `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad, bloqueado,
-  guides }`. `guides` (JSON `guias`, se omite si está vacío = automáticas): guías de ángulo del
+  guides, cuts }`. `guides` (JSON `guias`, `Option`: se omite si es `None` = automáticas; `[]` =
+  a mano sin ninguna, cada columna usa solo sus extremos automáticos): guías de ángulo del
   satín de zona, segmentos `[[x,y],[x,y]]` en mm absolutos; `transformar` también las mueve.
-  `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
+  `cuts` (JSON `cortes`, `Option`: se omite si es `None` = automáticos; `[]` = sin cortes):
+  cortes que parten el satín de zona en columnas, mismo formato que `guides`, también se
+  transforman. `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
   `OPACIDAD_GUIA` = 0,15). `bloqueado` (solo se escribe si es `true`): no se elige en el lienzo.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
   `texto {texto, fuente, alto (mayúsculas, mm), espaciado, afin [6]}`; `fuente` =
@@ -139,7 +142,17 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   borde con menor ancho medio (con la guía de cada punta cortada sobre el corte, ver `cut`),
   correspondencia densa con DTW, simplificada (0,4 mm) y con guías al menos cada 10 mm.
   `Objeto::area_guides()` = las propias o las automáticas. Formas con ramas (h, k) o colas (e)
-  salen mal: separarlas. Puntas cortadas (`cut`): tramos rectos del borde (`stretches`) cerca
+  salen mal sin cortes. Cortes (`puntadas/split.rs`): `split(rings, cuts)` aplica cada corte a
+  su parte: los dos extremos en el borde exterior la parten en dos; entre exterior y agujero
+  (o dos agujeros) los une en un solo anillo por una rendija de ancho cero (la «e», el «8»).
+  `auto_cuts`: esquinas que giran > 40° hacia afuera de la zona (vértices del aplanado); se
+  unen de a pares por dentro de la forma, de la más corta (barra de la H, bajo la de la T); las
+  sueltas se cortan prolongando la más corta de sus dos aristas (brazos de la E, la L).
+  `Objeto::area_cuts()` = propios o automáticos. `area_satin` cose las columnas en orden voraz
+  desde la aguja, cada una desde su punta más cercana. Extremos de una columna sin guías: el
+  par de puntas de menor ancho medio, salvo que dos tramos rectos donde el borde dobla (lados
+  planos) den hasta 1,5 veces ese ancho (`FLAT_BIAS`: una punta siempre parece más angosta; sin
+  esto un rectángulo corto se cosía desde una esquina, con guías de largo cero). Puntas cortadas (`cut`): tramos rectos del borde (`stretches`) cerca
   de la punta, de largo ≤ 2 anchos y a menos de ~45° de un peldaño cercano; el más alineado es
   la guía del extremo (sirve con cortes en diagonal y con la punta en una esquina).
 - `fondo` (opcional, se omite si es `None`): `{ruta, centro [mm], ancho mm, opacidad, visible,
@@ -242,8 +255,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `Puntada::angulo()`, una línea desde el centro; arrastrarla cambia el ángulo en vivo
   (`edit_grouped`), Shift = de a 15°, Esc deshace. `gestos::angulo_filas` (en (−90, 90]).
 - Herramienta Guías (`Tool::Guides`, G; `canvas/guias.rs`): con un solo objeto `AreaSatin` no
-  bloqueado (`guide_handles`, en caché en `ProyectoDoc.guides`) muestra solo sus guías, sin
-  marco (punteadas si son automáticas). Arrastrar a través de la forma = guía nueva
+  bloqueado (`guide_object`; en caché en `ProyectoDoc.guides` y `.cuts`) muestra solo sus guías
+  (extremos cuadrados, copihue) y cortes (redondos, hoja), sin marco (punteados si son
+  automáticos). Guías y cortes se editan igual (`proyecto::LineKind`, `lines`, `edit_lines`,
+  `remove_line`); lo que se dibuja lo elige `Editor.guide_kind` en la barra contextual (Ctrl:
+  lo otro), que además tiene «Automáticas», «Sin guías» (`Some([])`, para ponerlas a mano),
+  «Cortes automáticos» y «Sin cortes». Arrastrar a través de la forma = guía nueva
   (`Gesto::NewGuide`, Shift de a 15°; al soltar `cut_across` corta la recta en los bordes: el
   tramo de adentro que contiene el medio del trazo, o el más cercano). Arrastrar un extremo
   (`GuideDrag::End`, pegado al borde con `nearest_edge_point`) o el medio (`GuideDrag::Slide`,

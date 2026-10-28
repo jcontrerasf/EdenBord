@@ -788,13 +788,13 @@ impl Editor {
             }
             // Ya se aplicó mientras se arrastraba.
             Gesto::Angulo { .. } | Gesto::Guide { .. } => {}
-            Gesto::NewGuide { obj, a, b } => {
-                // A click without dragging doesn't draw a guide.
+            Gesto::NewGuide { obj, kind, a, b } => {
+                // A click without dragging doesn't draw a line.
                 if a.distance(b) > 0.2
                     && let Some(g) = doc.cut_across(obj, a, b)
                 {
-                    doc.edit_guides(obj, None, |guides| guides.push(g));
-                    self.selected_guide = Some((obj, doc.guides[obj].len() - 1));
+                    doc.edit_lines(obj, kind, None, |lines| lines.push(g));
+                    self.selected_guide = Some((obj, kind, doc.lines(obj, kind).len() - 1));
                 }
             }
             Gesto::Caja { a, b, sumar } => {

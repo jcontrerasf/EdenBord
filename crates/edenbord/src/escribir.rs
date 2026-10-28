@@ -119,7 +119,8 @@ impl Editor {
             puntada: preset_por_nombre("Relleno horizontal"),
             opacidad: bordado::OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         };
         let antes = doc.history_len();
         doc.add(vec![obj]);

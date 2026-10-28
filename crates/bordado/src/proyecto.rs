@@ -69,9 +69,13 @@ pub struct Objeto {
     #[serde(default, skip_serializing_if = "no")]
     pub bloqueado: bool,
     /// Angle guides of an area satin ([`Puntada::AreaSatin`]): segments across the shape, in
-    /// mm. Empty = automatic.
-    #[serde(rename = "guias", default, skip_serializing_if = "Vec::is_empty")]
-    pub guides: Vec<[[f64; 2]; 2]>,
+    /// mm. `None` = automatic; empty = none (only the automatic ends of each column).
+    #[serde(rename = "guias", default, skip_serializing_if = "Option::is_none")]
+    pub guides: Option<Vec<[[f64; 2]; 2]>>,
+    /// Cuts that split an area satin in columns: segments across the shape, in mm. `None` =
+    /// automatic (where the strokes meet); empty = no cuts.
+    #[serde(rename = "cortes", default, skip_serializing_if = "Option::is_none")]
+    pub cuts: Option<Vec<[[f64; 2]; 2]>>,
 }
 
 /// Opacidad con que se ven las guías si no se elige otra: muy traslúcidas.
@@ -733,7 +737,13 @@ impl Objeto {
             Forma::Contorno { d } | Forma::Linea { d } => d.apply_affine(t),
             Forma::Texto { afin, .. } => *afin = (t * Affine::new(*afin)).as_coeffs(),
         }
-        for p in self.guides.iter_mut().flatten() {
+        for p in self
+            .guides
+            .iter_mut()
+            .chain(&mut self.cuts)
+            .flatten()
+            .flatten()
+        {
             let q = t * kurbo::Point::new(p[0], p[1]);
             *p = [q.x, q.y];
         }
@@ -881,7 +891,8 @@ mod tests {
             puntada: preset_por_nombre("Relleno 45°"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         });
         p.objetos.push(Objeto {
             nombre: "texto".into(),
@@ -897,7 +908,8 @@ mod tests {
             puntada: Puntada::Ninguna,
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         });
         let text = p.guardar();
         assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
@@ -947,7 +959,8 @@ mod tests {
             puntada: preset_por_nombre("Pespunte"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert_eq!(pegar_objetos(&text), Some(vec![o]));
@@ -1071,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn guides_are_saved_and_transformed() {
+    fn guides_and_cuts_are_saved_and_transformed() {
         let mut o = Objeto {
             nombre: "c".into(),
             visible: true,
@@ -1082,23 +1095,32 @@ mod tests {
             puntada: preset_por_nombre("Satín de zona"),
             opacidad: OPACIDAD_GUIA,
             bloqueado: false,
-            guides: vec![],
+            guides: None,
+            cuts: None,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert!(!text.contains("guias"), "automatic guides aren't written");
+        assert!(!text.contains("cortes"), "nor automatic cuts");
         assert!(
             text.contains(r#""tipo":"satin_zona","densidad":0.4"#),
             "{text}"
         );
-        o.guides = vec![[[5.0, 0.0], [5.0, 2.0]]];
+        o.guides = Some(vec![[[5.0, 0.0], [5.0, 2.0]]]);
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert!(
             text.contains(r#""guias":[[[5.0,0.0],[5.0,2.0]]]"#),
             "{text}"
         );
         assert_eq!(pegar_objetos(&text), Some(vec![o.clone()]));
+        // No cuts is not the same as automatic cuts.
+        o.cuts = Some(vec![]);
+        let text = copiar_objetos(std::slice::from_ref(&o));
+        assert!(text.contains(r#""cortes":[]"#), "{text}");
+        assert_eq!(pegar_objetos(&text), Some(vec![o.clone()]));
+        o.cuts = Some(vec![[[3.0, 0.0], [3.0, 2.0]]]);
         o.transformar(Affine::translate((1.0, 3.0)));
-        assert_eq!(o.guides, vec![[[6.0, 3.0], [6.0, 5.0]]]);
+        assert_eq!(o.guides, Some(vec![[[6.0, 3.0], [6.0, 5.0]]]));
+        assert_eq!(o.cuts, Some(vec![[[4.0, 3.0], [4.0, 5.0]]]));
     }
 
     #[test]

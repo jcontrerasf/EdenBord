@@ -56,7 +56,8 @@ fn objeto(grupo: Grupo, puntada: Puntada) -> Objeto {
         puntada,
         opacidad: OPACIDAD_GUIA,
         bloqueado: false,
-        guides: vec![],
+        guides: None,
+        cuts: None,
     }
 }
 

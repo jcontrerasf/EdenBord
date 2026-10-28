@@ -163,8 +163,10 @@ struct Editor {
     gesto: Option<gestos::Gesto>,
     /// La imagen de fondo está elegida (muestra sus manijas) en vez de objetos.
     fondo_sel: bool,
-    /// Angle guide picked on the canvas (object, guide): Supr deletes it.
-    selected_guide: Option<(usize, usize)>,
+    /// Angle guide or cut picked on the canvas (object, kind, index): Supr deletes it.
+    selected_guide: Option<(usize, proyecto::LineKind, usize)>,
+    /// What dragging across an area satin draws with the Guides tool (Ctrl: the other one).
+    guide_kind: proyecto::LineKind,
     /// Herramienta de nodos: objeto en edición, nodos elegidos y arrastre en curso.
     nodos_obj: Option<usize>,
     nodos_sel: Vec<nodos::Id>,
@@ -224,6 +226,7 @@ impl Default for Editor {
             gesto: None,
             fondo_sel: false,
             selected_guide: None,
+            guide_kind: proyecto::LineKind::Guide,
             nodos_obj: None,
             nodos_sel: vec![],
             gesto_nodo: None,
@@ -600,8 +603,8 @@ impl Editor {
                     let ids = std::mem::take(&mut self.nodos_sel);
                     doc.edit_nodes(i, |subs| nodos::borrar(subs, &ids));
                 }
-            } else if delete && let Some((obj, guide)) = self.selected_guide.take() {
-                doc.remove_guide(obj, guide);
+            } else if delete && let Some((obj, kind, k)) = self.selected_guide.take() {
+                doc.remove_line(obj, kind, k);
             } else if delete && self.fondo_sel {
                 doc.edit(|p| p.fondo = None);
                 self.fondo_sel = false;

@@ -7,7 +7,8 @@
 //!
 //! A part with no holes (C, l, s) is a column between two ends: the first and last guides.
 //! A part with one hole (o, e) is a ring: the outer edge and the hole are the rails. Parts
-//! with more holes can't be sewn as one column.
+//! with more holes can't be sewn as one column. Letters with branches (H, T, E) are first split
+//! in parts by cuts ([`super::split`]).
 
 use kurbo::Point;
 
@@ -16,6 +17,7 @@ use crate::proyecto::BaseSatin;
 
 use super::Tramo;
 use super::satin::sew;
+use super::split::split;
 
 /// A guide: a segment across the column, from one rail to the other (mm).
 pub type Guide = [Point; 2];
@@ -28,6 +30,10 @@ const STRAIGHT_TOL: f64 = 0.05;
 const MIN_STRETCH: f64 = 0.3;
 /// A straight stretch is a cut across the column if it is within ~45° of a rung near the tip.
 const CUT_COS: f64 = 0.7;
+/// How far (mm) to look past a straight stretch to see whether the edge turns there (a flat
+/// end), and how much wider two flat ends may be than two tips and still be the ends.
+const FLAT_PROBE: f64 = 0.5;
+const FLAT_BIAS: f64 = 1.5;
 /// Longest cut, in widths of the column measured a little into it (the tip may be narrower).
 const MAX_CUT: f64 = 2.0;
 /// Candidate positions per ring when looking for the two ends of a column.
@@ -51,49 +57,67 @@ pub struct AreaSatin {
     pub skipped: usize,
 }
 
-/// Satin column filling each part of the area (even-odd rings), turning with the guides.
-/// Parts without enough guides use the automatic ones.
+/// Satin column filling each part of the area (even-odd rings, split by `cuts`), turning with
+/// the guides: `None` = automatic; with guides of its own, a part with fewer than two gets the
+/// automatic ends. The columns are sewn starting with
+/// the one closest to the needle (at `from`), each from its closest end.
 pub fn area_satin(
     rings: &[Vec<Point>],
-    guides: &[Guide],
+    guides: Option<&[Guide]>,
+    cuts: &[Guide],
     density: f64,
     base: BaseSatin,
     compensation: f64,
+    from: Point,
 ) -> AreaSatin {
+    let all = columns(rings, guides, cuts, density);
+    let skipped = all.iter().filter(|c| c.is_none()).count();
+    let mut left: Vec<Vec<(Point, Point)>> =
+        all.into_iter().flatten().filter(|c| c.len() > 1).collect();
     let mut out = AreaSatin {
         runs: vec![],
-        skipped: 0,
+        skipped,
     };
-    for pairs in columns(rings, guides, density) {
-        match pairs {
-            Some(pairs) if pairs.len() > 1 => {
-                let pairs: Vec<_> = pairs
-                    .into_iter()
-                    .map(|(a, b)| {
-                        let d = unitario(a - b) * compensation;
-                        (a + d, b - d)
-                    })
-                    .collect();
-                out.runs
-                    .push(split_long(&sew(&pairs, density, base), MAX_STITCH));
-            }
-            Some(_) => {}
-            None => out.skipped += 1,
+    let mut at = from;
+    while !left.is_empty() {
+        let mid = |(a, b): (Point, Point)| a.midpoint(b).distance(at);
+        let (k, reverse) = left
+            .iter()
+            .enumerate()
+            .flat_map(|(k, c)| [(k, false, mid(c[0])), (k, true, mid(c[c.len() - 1]))])
+            .min_by(|x, y| x.2.total_cmp(&y.2))
+            .map(|(k, r, _)| (k, r))
+            .unwrap();
+        let mut pairs = left.swap_remove(k);
+        if reverse {
+            pairs.reverse();
         }
+        let pairs: Vec<_> = pairs
+            .into_iter()
+            .map(|(a, b)| {
+                let d = unitario(a - b) * compensation;
+                (a + d, b - d)
+            })
+            .collect();
+        let run = split_long(&sew(&pairs, density, base), MAX_STITCH);
+        at = run.last().copied().unwrap_or(at);
+        out.runs.push(run);
     }
     out
 }
 
-/// The (left, right) edge pairs of the column of each part, `density / 2` apart (measured on
-/// the longer rail); `None` for the parts that can't be a column.
+/// The (left, right) edge pairs of the column of each part (split by `cuts`), `density / 2`
+/// apart (measured on the longer rail); `None` for the parts that can't be a column. Guides as
+/// in [`area_satin`].
 pub fn columns(
     rings: &[Vec<Point>],
-    guides: &[Guide],
+    guides: Option<&[Guide]>,
+    cuts: &[Guide],
     density: f64,
 ) -> Vec<Option<Vec<(Point, Point)>>> {
-    let parts = components(rings);
+    let parts = split(rings, cuts);
     let mut own: Vec<Vec<Guide>> = vec![vec![]; parts.len()];
-    for g in guides {
+    for g in guides.unwrap_or_default() {
         if let Some(k) = owner(&parts, g) {
             own[k].push(*g);
         }
@@ -101,16 +125,17 @@ pub fn columns(
     parts
         .iter()
         .zip(&own)
-        .map(|(part, guides)| {
-            let c = column(part, guides)?;
+        .map(|(part, own)| {
+            let c = column(part, guides.is_some().then_some(&own[..]))?;
             Some(pairs(&c, density / 2.0))
         })
         .collect()
 }
 
-/// Guides computed from the shape: the ends and as many in between as needed to follow it.
-pub fn auto_guides(rings: &[Vec<Point>]) -> Vec<Guide> {
-    components(rings)
+/// Guides computed from the shape (split by `cuts`): the ends of each column and as many in
+/// between as needed to follow it.
+pub fn auto_guides(rings: &[Vec<Point>], cuts: &[Guide]) -> Vec<Guide> {
+    split(rings, cuts)
         .iter()
         .flat_map(|part| match &part[..] {
             [ring] => auto_single(ring),
@@ -121,14 +146,14 @@ pub fn auto_guides(rings: &[Vec<Point>]) -> Vec<Guide> {
 }
 
 /// A closed ring measured by arc length (including the closing segment).
-struct Ring {
-    pts: Vec<Point>,
+pub(super) struct Ring {
+    pub(super) pts: Vec<Point>,
     /// Length up to each point; one more entry than points (the whole ring).
     cum: Vec<f64>,
 }
 
 impl Ring {
-    fn new(pts: &[Point]) -> Self {
+    pub(super) fn new(pts: &[Point]) -> Self {
         let n = pts.len();
         let mut cum = Vec::with_capacity(n + 1);
         let mut total = 0.0;
@@ -143,16 +168,16 @@ impl Ring {
         }
     }
 
-    fn len(&self) -> f64 {
+    pub(super) fn len(&self) -> f64 {
         *self.cum.last().unwrap()
     }
 
     /// Distance going forward from `from` to `to`.
-    fn fwd(&self, from: f64, to: f64) -> f64 {
+    pub(super) fn fwd(&self, from: f64, to: f64) -> f64 {
         (to - from).rem_euclid(self.len())
     }
 
-    fn at(&self, s: f64) -> Point {
+    pub(super) fn at(&self, s: f64) -> Point {
         let n = self.pts.len();
         let s = s.rem_euclid(self.len());
         let i = self.cum[1..].partition_point(|&c| c < s).min(n - 1);
@@ -162,7 +187,7 @@ impl Ring {
     }
 
     /// Distance to the nearest point of the ring and its position.
-    fn project(&self, p: Point) -> (f64, f64) {
+    pub(super) fn project(&self, p: Point) -> (f64, f64) {
         let n = self.pts.len();
         let mut best = (f64::MAX, 0.0);
         for i in 0..n {
@@ -183,7 +208,7 @@ impl Ring {
     }
 
     /// The ring walked forward from `from` for `dist` mm, both ends included.
-    fn walk(&self, from: f64, dist: f64) -> Vec<Point> {
+    pub(super) fn walk(&self, from: f64, dist: f64) -> Vec<Point> {
         let n = self.pts.len();
         let start = from.rem_euclid(self.len());
         let mut out = vec![self.at(start)];
@@ -214,7 +239,7 @@ struct Column {
 }
 
 /// Groups the rings by even-odd: each outer ring followed by its holes.
-fn components(rings: &[Vec<Point>]) -> Vec<Vec<Ring>> {
+pub(super) fn components(rings: &[Vec<Point>]) -> Vec<Vec<Ring>> {
     let rings: Vec<&Vec<Point>> = rings.iter().filter(|r| r.len() >= 3).collect();
     let depth: Vec<usize> = (0..rings.len())
         .map(|i| {
@@ -241,7 +266,7 @@ fn components(rings: &[Vec<Point>]) -> Vec<Vec<Ring>> {
 }
 
 /// The part whose edges are closest to both ends of the guide.
-fn owner(parts: &[Vec<Ring>], g: &Guide) -> Option<usize> {
+pub(super) fn owner(parts: &[Vec<Ring>], g: &Guide) -> Option<usize> {
     let dist =
         |part: &Vec<Ring>, p: Point| part.iter().map(|r| r.project(p).0).fold(f64::MAX, f64::min);
     (0..parts.len()).min_by(|&i, &j| {
@@ -250,7 +275,7 @@ fn owner(parts: &[Vec<Ring>], g: &Guide) -> Option<usize> {
     })
 }
 
-fn column(part: &[Ring], guides: &[Guide]) -> Option<Column> {
+fn column(part: &[Ring], guides: Option<&[Guide]>) -> Option<Column> {
     match part {
         [ring] => single(ring, guides, true),
         [outer, hole] => ring_column(outer, &oriented_like(hole, outer), guides),
@@ -259,9 +284,9 @@ fn column(part: &[Ring], guides: &[Guide]) -> Option<Column> {
 }
 
 /// Column of a part without holes. The ends are the two guides that have all the others on one
-/// side; with fewer than two guides, the automatic ends.
-fn single(ring: &Ring, guides: &[Guide], retry: bool) -> Option<Column> {
-    let mut guides = guides.to_vec();
+/// side; `None`: the automatic ones; with fewer than two, the automatic ends.
+fn single(ring: &Ring, guides: Option<&[Guide]>, retry: bool) -> Option<Column> {
+    let mut guides = guides.map_or_else(|| auto_single(ring), <[Guide]>::to_vec);
     if guides.len() < 2 {
         let auto = auto_single(ring);
         let (first, last) = (*auto.first()?, *auto.last()?);
@@ -275,7 +300,7 @@ fn single(ring: &Ring, guides: &[Guide], retry: bool) -> Option<Column> {
     let Some((e0, e1)) = ends(ring, &params) else {
         // Crossing guides: start over from the automatic ones.
         return if retry {
-            single(ring, &auto_single(ring), false)
+            single(ring, None, false)
         } else {
             None
         };
@@ -314,14 +339,19 @@ fn single(ring: &Ring, guides: &[Guide], retry: bool) -> Option<Column> {
     })
 }
 
-/// Column of a part with one hole: around the ring, from the first guide back to it.
-fn ring_column(outer: &Ring, hole: &Ring, guides: &[Guide]) -> Option<Column> {
-    let auto;
-    let guides = if guides.is_empty() {
-        auto = auto_ring(outer, hole);
-        &auto[..]
-    } else {
-        guides
+/// Column of a part with one hole: around the ring, from the first guide back to it (`None` or
+/// none: the automatic ones, or only where they start).
+fn ring_column(outer: &Ring, hole: &Ring, guides: Option<&[Guide]>) -> Option<Column> {
+    let mut auto = vec![];
+    let guides = match guides {
+        Some(g) if !g.is_empty() => g,
+        _ => {
+            auto = auto_ring(outer, hole);
+            if guides.is_some() {
+                auto.truncate(1);
+            }
+            &auto[..]
+        }
     };
     let params: Vec<(f64, f64)> = guides
         .iter()
@@ -472,7 +502,7 @@ fn auto_single(ring: &Ring) -> Vec<Guide> {
             }
         }
     }
-    let (_, p, q) = best;
+    let (point_cost, p, q) = best;
     // Over a straight end (a cut) the end guide goes along it, instead of a fan from the tip.
     let straight = stretches(ring);
     let (mut a0, mut b0) = (p, p);
@@ -484,9 +514,41 @@ fn auto_single(ring: &Ring) -> Vec<Guide> {
         (a1, b1) = (s0, s1);
     }
     // Going forward: a0, a1, b1, b0, all the way around once; if not, the cuts overlap.
-    let around = ring.fwd(a0, a1) + ring.fwd(a1, b1) + ring.fwd(b1, b0) + ring.fwd(b0, a0);
-    if (around - len).abs() > EPS * len.max(1.0) * 10.0 {
+    let around = |a0: f64, a1: f64, b1: f64, b0: f64| {
+        let total = ring.fwd(a0, a1) + ring.fwd(a1, b1) + ring.fwd(b1, b0) + ring.fwd(b0, a0);
+        (total - len).abs() <= EPS * len.max(1.0) * 10.0
+    };
+    if !around(a0, a1, b1, b0) {
         (a0, b0, a1, b1) = (p, p, q, q);
+    }
+    // Two flat ends (the short sides of a stubby rectangle) beat two tips unless the tips are
+    // clearly narrower: a tip always looks narrow, since the column starts with no width.
+    let flat = |&(s, l): &(f64, f64)| {
+        let d = unitario(ring.at(s + l) - ring.at(s));
+        let before = unitario(ring.at(s) - ring.at(s - FLAT_PROBE));
+        let after = unitario(ring.at(s + l + FLAT_PROBE) - ring.at(s + l));
+        d.dot(before).abs() < CUT_COS && d.dot(after).abs() < CUT_COS
+    };
+    let ends: Vec<(f64, f64)> = straight.iter().filter(|s| flat(s)).copied().collect();
+    let width = |a0: f64, a1: f64, b1: f64, b0: f64| {
+        let (la, lb) = (ring.fwd(a0, a1), ring.fwd(b1, b0));
+        (0..=END_SAMPLES)
+            .map(|k| {
+                let f = k as f64 / END_SAMPLES as f64;
+                ring.at(a0 + f * la).distance(ring.at(b0 - f * lb))
+            })
+            .sum::<f64>()
+    };
+    let best_flat = ends
+        .iter()
+        .flat_map(|&(s, l)| ends.iter().map(move |&(t, m)| (s + l, t, t + m, s)))
+        .filter(|&(a0, a1, b1, b0)| a1 != b0 && around(a0, a1, b1, b0))
+        .map(|(a0, a1, b1, b0)| (width(a0, a1, b1, b0), a0, a1, b1, b0))
+        .min_by(|x, y| x.0.total_cmp(&y.0));
+    if let Some((c, f0, f1, g1, g0)) = best_flat
+        && c <= FLAT_BIAS * point_cost
+    {
+        (a0, a1, b1, b0) = (f0, f1, g1, g0);
     }
     let (la, lb) = (ring.fwd(a0, a1), ring.fwd(b1, b0));
     let a = Arco::new(&ring.walk(a0, la));
@@ -720,7 +782,7 @@ fn oriented_like(hole: &Ring, outer: &Ring) -> Ring {
     }
 }
 
-fn area(pts: &[Point]) -> f64 {
+pub(super) fn area(pts: &[Point]) -> f64 {
     let n = pts.len();
     (0..n)
         .map(|i| pts[i].to_vec2().cross(pts[(i + 1) % n].to_vec2()))
@@ -728,7 +790,7 @@ fn area(pts: &[Point]) -> f64 {
         / 2.0
 }
 
-fn inside_ring(pts: &[Point], p: Point) -> bool {
+pub(super) fn inside_ring(pts: &[Point], p: Point) -> bool {
     let n = pts.len();
     let mut inside = false;
     for i in 0..n {
@@ -758,13 +820,14 @@ mod tests {
     }
 
     fn column_pairs(d: &str, guides: &[Guide]) -> Vec<(Point, Point)> {
-        columns(&rings(d), guides, 0.4).remove(0).unwrap()
+        let guides = (!guides.is_empty()).then_some(guides);
+        columns(&rings(d), guides, &[], 0.4).remove(0).unwrap()
     }
 
     #[test]
     fn rectangle_is_sewn_across_with_flat_ends() {
         let d = "M0,0 L20,0 L20,3 L0,3 Z";
-        let guides = auto_guides(&rings(d));
+        let guides = auto_guides(&rings(d), &[]);
         assert_eq!(guides.len(), 3, "{guides:?}");
         for g in [guides[0], guides[2]] {
             // Each end guide lies on a short side.
@@ -800,7 +863,7 @@ mod tests {
         // Upper half of a ring: the stitches are radial, horizontal at the ends and vertical
         // at the top.
         let d = "M-13,0 A13,13 0 0 1 13,0 L7,0 A7,7 0 0 0 -7,0 Z";
-        let guides = auto_guides(&rings(d));
+        let guides = auto_guides(&rings(d), &[]);
         assert!(guides.len() >= 3, "{guides:?}");
         let (first, last) = (guides[0], guides[guides.len() - 1]);
         assert!(angle(first[0], first[1]).min(180.0 - angle(first[0], first[1])) < 2.0);
@@ -832,7 +895,7 @@ mod tests {
         let d = "M25,-25 L8,-28.8 L-3,-25.5 L-14,-19.5 L-21.5,-12 L-26,-2 L-26.5,5 L-24,18 \
                  L-14,27 L2,28 L16,24.5 L18.5,12.3 L9,16.5 L2,17.5 L-7,16 L-11,9 L-11.5,-2 \
                  L-7,-11 L0,-16.5 L8,-18.7 L16,-17.2 L23,-13.7 Z";
-        let guides = auto_guides(&rings(d));
+        let guides = auto_guides(&rings(d), &[]);
         let is_cut = |g: &Guide, x: Point, y: Point| {
             let close = |p: Point, q: Point| p.distance(q) < 0.1;
             (close(g[0], x) && close(g[1], y)) || (close(g[0], y) && close(g[1], x))
@@ -850,6 +913,16 @@ mod tests {
         let pairs = column_pairs(d, &[]);
         for w in pairs.windows(2) {
             assert!(!cross(w[0], w[1]), "{:?}", w);
+        }
+    }
+
+    #[test]
+    fn stubby_rectangles_have_flat_ends() {
+        // Shorter than twice its width: still sewn between the short sides, not from a corner.
+        let guides = auto_guides(&rings("M3,8.5 L10,8.5 L10,11.5 L3,11.5 Z"), &[]);
+        for g in &guides {
+            assert!(g[0].distance(g[1]) > 2.9, "no guide is a point: {guides:?}");
+            assert!((g[0].x - g[1].x).abs() < 0.2, "across: {guides:?}");
         }
     }
 
@@ -885,7 +958,15 @@ mod tests {
     fn parts_with_two_holes_are_skipped() {
         let d = "M0,0 L20,0 L20,10 L0,10 Z M2,2 L8,2 L8,8 L2,8 Z M12,2 L18,2 L18,8 L12,8 Z \
                  M30,0 L50,0 L50,3 L30,3 Z";
-        let r = area_satin(&rings(d), &[], 0.4, BaseSatin::Central, 0.0);
+        let r = area_satin(
+            &rings(d),
+            None,
+            &[],
+            0.4,
+            BaseSatin::Central,
+            0.0,
+            Point::ZERO,
+        );
         assert_eq!(r.skipped, 1);
         assert_eq!(r.runs.len(), 1);
     }
@@ -893,7 +974,15 @@ mod tests {
     #[test]
     fn long_stitches_are_split() {
         let d = "M0,0 L20,0 L20,16 L0,16 Z";
-        let r = area_satin(&rings(d), &[], 0.4, BaseSatin::Ninguna, 0.0);
+        let r = area_satin(
+            &rings(d),
+            None,
+            &[],
+            0.4,
+            BaseSatin::Ninguna,
+            0.0,
+            Point::ZERO,
+        );
         for w in r.runs[0].windows(2) {
             assert!(w[0].distance(w[1]) <= MAX_STITCH + 1e-9);
         }

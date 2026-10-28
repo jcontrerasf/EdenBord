@@ -9,6 +9,7 @@ mod motivo;
 mod relleno;
 mod remate;
 mod satin;
+mod split;
 
 use kurbo::Point;
 
@@ -20,6 +21,7 @@ pub use motivo::motivo;
 pub use relleno::{Tatami, relleno};
 pub use remate::con_remates;
 pub use satin::satin;
+pub use split::auto_cuts;
 
 /// Puntos que se cosen sin saltar.
 pub type Tramo = Vec<Point>;

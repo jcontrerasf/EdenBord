@@ -27,7 +27,8 @@ cargo run -p bordado --example generar -- dibujo.svg salida.jef vista.svg  # SVG
 
 ## Archivos reales de prueba
 
-- `crates/jef/tests/real_files.rs` lee los `.jef` de la carpeta en la variable `JEF_FIXTURES`.
+- `crates/jef/tests/real_files.rs` lee los `.jef` y `.jef+` de la carpeta en la variable `JEF_FIXTURES`
+  (y sus subcarpetas).
   Sin la variable las pruebas se saltan (con aviso); con una ruta inválida fallan.
 - La variable se define en `.cargo/config.toml` (`[env]`), **ignorado por git**. Plantilla:
   `.cargo/config.example.toml`.
@@ -46,14 +47,16 @@ Little-endian, sin compresión. Unidades de 0,1 mm.
 | 8 | 16 bytes fecha ASCII `YYYYMMDDHHMMSS` + 2 de relleno (a veces todo ceros) |
 | 24 | i32 nº de colores |
 | 28 | i32 nº de "puntadas" = bytes de datos / 2 (incluye comandos y el fin) |
-| 32 | i32 bastidor: 0=A 110×110, 1=C 50×50, 2=B 140×200, 3=F 126×110, 4=SQ 200×200 |
+| 32 | i32 bastidor: 0=A 110×110, 1=C 50×50, 2=B 140×200, 3=F 126×110, 4=SQ 200×200, 41=SQ14b 140×140 (sin documentar; la MC200E lo muestra así); en archivos reales también 6, 12, 14, 15, 25, 30, 37, 39 (sin documentar: `Hoop::Unknown`, se conservan) |
 | 36 | 5 bloques × 4 i32: bloque 0 = distancias del origen a izq/arriba/der/abajo (incluye el origen); bloques 1–4 = márgenes a bastidores F, C, B y (repetido) B; `-1` = no cabe |
 | 116 | i32 por color: índice a la paleta Janome (`palette.rs`, 1..=78) |
 | … | i32 por color: tipo de hilo (siempre 13) |
 
 Puntadas: pares `(dx, dy)` i8; **y del archivo crece hacia arriba**, el modelo usa y hacia abajo.
 Rango ±127 (−128 = `0x80` choca con el escape). Comandos de 4 bytes `0x80 código dx dy`:
-`0x01` cambio de color (siempre `dx,dy = 0`), `0x02` salto, `0x80 0x10` fin (2 bytes).
+`0x01` cambio de color (siempre `dx,dy = 0`), `0x02` salto, `0x20` corte de hilo
+(`StitchKind::Trim`, máquinas con cortador; casi siempre `(0,0)`, seguido de saltos), `0x80 0x10`
+fin (2 bytes).
 
 Rarezas encontradas:
 - Hay datos basura después del fin en algunos archivos → se guardan en `Jef::trailing`.
@@ -63,6 +66,12 @@ Rarezas encontradas:
   **No fusionar ni eliminar saltos.**
 - El bastidor declarado no siempre es el mínimo; `refresh_header()` solo lo cambia si no cabe.
 - `.JBF` (cabecera `JANOMEB2`) es otro formato de Janome, aún sin soporte.
+- JEF+ (`.jef+`, formato editable de Janome): flags `0x01`, `gap` de 24 bytes tras la tabla de
+  colores (8 ceros, `JANOME\0\0`, i32 1, i32 offset del final de las puntadas) y después del fin
+  los objetos editables (cada uno con un JEF propio, flags `0x15`). La máquina lo lee como JEF.
+  `is_jef_plus` / `strip_jef_plus` (deja flags `0x0A`, sin `gap` ni `trailing`: da exacto el
+  `.jef` normal que exporta Janome); `Doc::checkpoint` lo quita en la primera edición.
+- Bastidor desconocido: `refresh_header()` no lo cambia (no se sabe su tamaño).
 
 ## Invariantes (tienen tests; no romperlas)
 
@@ -259,7 +268,7 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   puntero), Ctrl+Shift+V (en el mismo lugar, vía `ViewportCommand::RequestPaste`), Ctrl+D,
   Ctrl+A, Esc, Supr (objetos, nodos o el fondo elegido), flechas.
 - Hay a lo sumo un documento abierto: `Editor.doc` (JEF) **o** `Editor.proyecto`. Abrir decide
-  por extensión (`.jef`, `.edenbord`/`.bordado`, `.svg` → proyecto nuevo con guías).
+  por extensión (`.edenbord`/`.bordado`, `.svg` → proyecto nuevo con guías; lo demás, como `.jef`/`.jef+`, se lee como JEF).
 - `proyecto.rs`: `ProyectoDoc` = proyecto + selección + historial (copias del `Proyecto` con
   su selección, que vuelve al deshacer) + puntadas generadas y polilíneas en caché (se
   recalculan en `sync()` tras cada edición). `edit_grouped(clave, …)` junta en un solo deshacer
@@ -365,7 +374,7 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - AppImage: `packaging/appimage.sh [versión]` (necesita `appimagetool`, o la variable
   `APPIMAGETOOL`). Salida en `target/paquetes/`.
 - Windows: `packaging/windows/edenbord.iss` (Inno Setup; asocia `.edenbord` y opcionalmente
-  `.jef`) + zip portable. Solo se arma en CI.
+  `.jef`/`.jef+`) + zip portable. Solo se arma en CI.
 - `.github/workflows/ci.yml`: fmt, clippy, tests (Linux) y build en Windows.
   `release.yml`: con tag `vX.Y.Z` (debe coincidir con la versión de Cargo.toml) arma .deb,
   AppImage, instalador y zip y publica el Release; `workflow_dispatch` solo deja artefactos.

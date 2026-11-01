@@ -55,6 +55,8 @@ impl Doc {
         self.redo.clear();
         self.dirty = true;
         self.last_key = None;
+        // A JEF+'s editable objects would no longer match the edited stitches.
+        self.jef.strip_jef_plus();
     }
 
     /// Aplica una edición con su punto de deshacer.

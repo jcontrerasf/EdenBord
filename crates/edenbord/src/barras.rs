@@ -364,7 +364,7 @@ impl Editor {
         let mut elegido = None;
         for path in &self.recientes {
             let ico = match crate::extension(path).as_str() {
-                "jef" => iconos::ARCHIVO_JEF,
+                "jef" | "jef+" => iconos::ARCHIVO_JEF,
                 "svg" => iconos::SVG,
                 "edenbord" | "bordado" => iconos::FLOR,
                 _ => iconos::ARCHIVO,

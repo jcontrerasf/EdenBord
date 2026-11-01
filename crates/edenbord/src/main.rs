@@ -299,9 +299,18 @@ fn open_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new()
         .add_filter(
             "Bordados, proyectos y vectores",
-            &["jef", "JEF", bordado::EXTENSION, "bordado", "svg", "SVG"],
+            &[
+                "jef",
+                "JEF",
+                "jef+",
+                "JEF+",
+                bordado::EXTENSION,
+                "bordado",
+                "svg",
+                "SVG",
+            ],
         )
-        .add_filter("Bordado Janome", &["jef", "JEF"])
+        .add_filter("Bordado Janome", &["jef", "JEF", "jef+", "JEF+"])
         .add_filter("Proyecto EdenBord", &[bordado::EXTENSION, "bordado"])
         .add_filter("Vector SVG", &["svg", "SVG"])
 }
@@ -788,6 +797,12 @@ impl Editor {
             ui.label("Saltos");
             ui.label(jef.count(StitchKind::Jump).to_string());
             ui.end_row();
+            let trims = jef.count(StitchKind::Trim);
+            if trims > 0 {
+                ui.label("Cortes de hilo");
+                ui.label(trims.to_string());
+                ui.end_row();
+            }
         });
         let (_, long) = jef.odd_stitches(0, LONG_STITCH);
         if long > 0 {
@@ -796,7 +811,12 @@ impl Editor {
                 format!("{} {long} puntadas de más de 12 mm", iconos::AVISO),
             );
         }
-        if !jef.trailing.is_empty() {
+        if jef.is_jef_plus() {
+            ui.label(
+                "JEF+: trae los objetos editables de Janome. Si lo editas, se guarda como \
+                 JEF normal (la máquina lo borda igual).",
+            );
+        } else if !jef.trailing.is_empty() {
             ui.colored_label(
                 tema::AVISO,
                 format!(
@@ -832,7 +852,10 @@ impl Editor {
                 j.refresh_header();
             });
         }
-        if !doc.jef.fits_in(doc.jef.header.hoop) {
+        let hoop = doc.jef.header.hoop;
+        if hoop.size().is_none() {
+            ui.label("Código de bastidor que EdenBord no conoce: se conserva tal cual.");
+        } else if !doc.jef.fits_in(hoop) {
             ui.colored_label(tema::COPIHUE, "El diseño no cabe en este bastidor");
         }
     }

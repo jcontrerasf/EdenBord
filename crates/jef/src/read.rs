@@ -1,5 +1,7 @@
 use crate::model::{Header, Hoop, Jef, Stitch, StitchKind};
-use crate::{COLOR_TABLE_OFFSET, CTRL_COLOR, CTRL_END, CTRL_ESCAPE, CTRL_JUMP, JefError};
+use crate::{
+    COLOR_TABLE_OFFSET, CTRL_COLOR, CTRL_END, CTRL_ESCAPE, CTRL_JUMP, CTRL_TRIM, JefError,
+};
 
 /// Más colores que esto indica un archivo corrupto, no un diseño real.
 const MAX_COLORS: i32 = 1000;
@@ -76,6 +78,7 @@ fn read_stitches(data: &[u8], mut pos: usize) -> Result<(Vec<Stitch>, usize), Je
                 CTRL_END => return Ok((stitches, pos + 2)),
                 CTRL_COLOR => StitchKind::ColorChange,
                 CTRL_JUMP => StitchKind::Jump,
+                CTRL_TRIM => StitchKind::Trim,
                 code => return Err(JefError::UnknownControl { code, at: pos }),
             }
         } else {

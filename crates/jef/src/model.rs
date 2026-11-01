@@ -1,5 +1,8 @@
 use crate::palette;
 
+/// Header flags of plain JEF files (and of a JEF+ once stripped).
+const PLAIN_FLAGS: i32 = 0x0A;
+
 /// Tipo de cada entrada de la secuencia de bordado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StitchKind {
@@ -9,6 +12,9 @@ pub enum StitchKind {
     Jump,
     /// Cambio al siguiente color; los puntos que siguen usan el hilo siguiente.
     ColorChange,
+    /// Thread trim (`0x80 0x20`, machines with an automatic cutter): cuts the thread and
+    /// moves without sewing, like a jump.
+    Trim,
 }
 
 /// Una entrada de la secuencia, en coordenadas absolutas (0,1 mm, y hacia abajo).
@@ -32,6 +38,9 @@ pub enum Hoop {
     F126x110,
     /// Bastidor SQ, 200 × 200 mm.
     Sq200x200,
+    /// SQ14b hoop, 140 × 140 mm (MC200E). Code 41: not in the public docs, the machine shows
+    /// a JEF+ with that code as SQ14b.
+    Sq14b140x140,
     Unknown(i32),
 }
 
@@ -43,6 +52,7 @@ impl Hoop {
             2 => Hoop::B140x200,
             3 => Hoop::F126x110,
             4 => Hoop::Sq200x200,
+            41 => Hoop::Sq14b140x140,
             other => Hoop::Unknown(other),
         }
     }
@@ -54,6 +64,7 @@ impl Hoop {
             Hoop::B140x200 => 2,
             Hoop::F126x110 => 3,
             Hoop::Sq200x200 => 4,
+            Hoop::Sq14b140x140 => 41,
             Hoop::Unknown(code) => code,
         }
     }
@@ -66,6 +77,7 @@ impl Hoop {
             Hoop::B140x200 => Some((1400, 2000)),
             Hoop::F126x110 => Some((1260, 1100)),
             Hoop::Sq200x200 => Some((2000, 2000)),
+            Hoop::Sq14b140x140 => Some((1400, 1400)),
             Hoop::Unknown(_) => None,
         }
     }
@@ -77,15 +89,17 @@ impl Hoop {
             Hoop::B140x200 => "B 140×200 mm".into(),
             Hoop::F126x110 => "F 126×110 mm".into(),
             Hoop::Sq200x200 => "SQ 200×200 mm".into(),
+            Hoop::Sq14b140x140 => "SQ14b 140×140 mm".into(),
             Hoop::Unknown(code) => format!("desconocido ({code})"),
         }
     }
 
     /// Bastidores en orden de tamaño, para elegir el más chico que calce.
-    pub const BY_SIZE: [Hoop; 5] = [
+    pub const BY_SIZE: [Hoop; 6] = [
         Hoop::C50x50,
         Hoop::A110x110,
         Hoop::F126x110,
+        Hoop::Sq14b140x140,
         Hoop::B140x200,
         Hoop::Sq200x200,
     ];
@@ -217,6 +231,22 @@ impl Jef {
         })
     }
 
+    /// Whether this is a JEF+ (Janome's editable format): a `JANOME` marker after the color
+    /// table and the editable objects after the end. Machines read it as a plain JEF.
+    pub fn is_jef_plus(&self) -> bool {
+        self.header.gap.windows(6).any(|w| w == b"JANOME")
+    }
+
+    /// Turns a JEF+ into a plain JEF: drops the marker and the editable objects (which would
+    /// no longer match the stitches after an edit). Does nothing on a plain JEF.
+    pub fn strip_jef_plus(&mut self) {
+        if self.is_jef_plus() {
+            self.header.flags = PLAIN_FLAGS;
+            self.header.gap.clear();
+            self.trailing.clear();
+        }
+    }
+
     /// Recalcula las extensiones y, si el diseño ya no cabe, el bastidor.
     /// Úsalo después de modificar las puntadas; los conteos los calcula siempre el escritor.
     pub fn refresh_header(&mut self) {
@@ -239,7 +269,9 @@ impl Jef {
             hoop_b,
         ];
 
-        if !self.fits_in(self.header.hoop)
+        // Unknown hoop codes are kept: their size is unknown, so we can't tell if it fits.
+        if self.header.hoop.size().is_some()
+            && !self.fits_in(self.header.hoop)
             && let Some(h) = Hoop::BY_SIZE.into_iter().find(|&h| self.fits_in(h))
         {
             self.header.hoop = h;

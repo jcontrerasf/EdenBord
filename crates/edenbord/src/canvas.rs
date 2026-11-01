@@ -1414,7 +1414,7 @@ fn draw_stitches(
                 push_point(&mut shapes, &mut run, p, stroke);
             } else {
                 flush_run(&mut shapes, &mut run, stroke);
-                if show_jumps && s.kind == StitchKind::Jump && i > 0 {
+                if show_jumps && matches!(s.kind, StitchKind::Jump | StitchKind::Trim) && i > 0 {
                     shapes.extend(Shape::dashed_line(&[pt(i - 1), p], jump_stroke, 4.0, 3.0));
                 }
             }

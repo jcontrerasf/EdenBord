@@ -32,7 +32,7 @@ Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Tasks]
 Name: "escritorio"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "asociarjef"; Description: "Abrir los archivos .jef con EdenBord"; GroupDescription: "Asociar archivos:"
+Name: "asociarjef"; Description: "Abrir los archivos .jef y .jef+ con EdenBord"; GroupDescription: "Asociar archivos:"
 
 [Files]
 Source: "..\..\target\release\edenbord.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -48,9 +48,11 @@ Root: HKA; Subkey: "Software\Classes\.edenbord"; ValueType: string; ValueName: "
 Root: HKA; Subkey: "Software\Classes\EdenBord.Proyecto"; ValueType: string; ValueName: ""; ValueData: "Proyecto EdenBord"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\EdenBord.Proyecto\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\edenbord.exe,0"
 Root: HKA; Subkey: "Software\Classes\EdenBord.Proyecto\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\edenbord.exe"" ""%1"""
-; Bordados .jef: en "Abrir con" siempre; como programa por defecto si se elige la tarea.
+; Bordados .jef y .jef+ (mismo ProgID): en "Abrir con" siempre; como programa por defecto si se elige la tarea.
 Root: HKA; Subkey: "Software\Classes\.jef\OpenWithProgids"; ValueType: string; ValueName: "EdenBord.Jef"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.jef+\OpenWithProgids"; ValueType: string; ValueName: "EdenBord.Jef"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\.jef"; ValueType: string; ValueName: ""; ValueData: "EdenBord.Jef"; Flags: uninsdeletevalue; Tasks: asociarjef
+Root: HKA; Subkey: "Software\Classes\.jef+"; ValueType: string; ValueName: ""; ValueData: "EdenBord.Jef"; Flags: uninsdeletevalue; Tasks: asociarjef
 Root: HKA; Subkey: "Software\Classes\EdenBord.Jef"; ValueType: string; ValueName: ""; ValueData: "Bordado Janome"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\EdenBord.Jef\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\edenbord.exe,0"
 Root: HKA; Subkey: "Software\Classes\EdenBord.Jef\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\edenbord.exe"" ""%1"""

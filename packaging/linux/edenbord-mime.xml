@@ -9,5 +9,6 @@
   <mime-type type="application/x-jef">
     <comment>Bordado Janome</comment>
     <glob pattern="*.jef" case-sensitive="false"/>
+    <glob pattern="*.jef+" case-sensitive="false"/>
   </mime-type>
 </mime-info>

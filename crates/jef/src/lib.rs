@@ -28,6 +28,7 @@ const CTRL_ESCAPE: u8 = 0x80;
 const CTRL_COLOR: u8 = 0x01;
 const CTRL_JUMP: u8 = 0x02;
 const CTRL_END: u8 = 0x10;
+const CTRL_TRIM: u8 = 0x20;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JefError {
@@ -163,6 +164,72 @@ mod tests {
         jef.refresh_header();
         assert_eq!(jef.header.hoop, Hoop::B140x200);
         assert_eq!(jef.header.thread_types, vec![DEFAULT_THREAD_TYPE]);
+    }
+
+    #[test]
+    fn trims_roundtrip_and_cut_once_on_long_moves() {
+        use StitchKind::*;
+        let jef = design(
+            &[
+                (10, 0, Normal),
+                (9, -3, Trim),
+                (20, 0, Normal),
+                (320, 0, Trim),
+            ],
+            vec![1],
+        );
+        let bytes = write(&jef);
+        let back = read(&bytes).unwrap();
+        assert_eq!(write(&back), bytes);
+        // The 300 move is split: one trim where the needle is, then jumps.
+        assert_eq!(back.count(Trim), 2);
+        assert_eq!(back.count(Jump), 2);
+        assert_eq!(back.stitches[1], jef.stitches[1]);
+        let (end, orig) = (back.stitches.last().unwrap(), jef.stitches.last().unwrap());
+        assert_eq!((end.x, end.y), (orig.x, orig.y));
+    }
+
+    #[test]
+    fn sq14b_is_picked_between_f_and_b() {
+        use StitchKind::*;
+        let mut jef = design(&[(-650, -600, Normal), (650, 600, Normal)], vec![1]);
+        assert_eq!(jef.header.hoop, Hoop::Sq14b140x140);
+        assert_eq!(Hoop::from_code(41), Hoop::Sq14b140x140);
+        assert_eq!(read(&write(&jef)).unwrap().header.hoop.code(), 41);
+        jef.stitches.push(Stitch {
+            x: 0,
+            y: 750,
+            kind: Normal,
+        });
+        jef.refresh_header();
+        assert_eq!(jef.header.hoop, Hoop::B140x200);
+    }
+
+    #[test]
+    fn unknown_hoop_is_kept_on_refresh() {
+        use StitchKind::*;
+        let mut jef = design(&[(10, 10, Normal)], vec![1]);
+        jef.header.hoop = Hoop::from_code(14);
+        jef.refresh_header();
+        assert_eq!(jef.header.hoop, Hoop::Unknown(14));
+        assert_eq!(read(&write(&jef)).unwrap().header.hoop.code(), 14);
+    }
+
+    #[test]
+    fn strip_jef_plus_only_touches_jef_plus() {
+        use StitchKind::*;
+        let mut plain = design(&[(10, 10, Normal)], vec![1]);
+        plain.trailing = vec![1, 2, 3];
+        let mut plus = plain.clone();
+        plus.header.flags = 1;
+        plus.header.gap = [&[0u8; 8][..], b"JANOME\0\0", &[1, 0, 0, 0, 0, 1, 0, 0]].concat();
+        assert!(plus.is_jef_plus() && !plain.is_jef_plus());
+        let before = plain.clone();
+        plain.strip_jef_plus();
+        assert_eq!(plain, before);
+        plus.strip_jef_plus();
+        assert_eq!(plus.header.flags, 0x0A);
+        assert!(plus.header.gap.is_empty() && plus.trailing.is_empty());
     }
 
     #[test]

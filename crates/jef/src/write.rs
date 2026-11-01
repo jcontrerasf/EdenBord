@@ -1,7 +1,7 @@
 use crate::model::{Jef, StitchKind};
 use crate::{
-    COLOR_TABLE_OFFSET, CTRL_COLOR, CTRL_END, CTRL_ESCAPE, CTRL_JUMP, DEFAULT_THREAD_TYPE,
-    MAX_DELTA,
+    COLOR_TABLE_OFFSET, CTRL_COLOR, CTRL_END, CTRL_ESCAPE, CTRL_JUMP, CTRL_TRIM,
+    DEFAULT_THREAD_TYPE, MAX_DELTA,
 };
 
 /// Escribe el diseño en formato JEF.
@@ -70,6 +70,9 @@ fn push_move(out: &mut Vec<u8>, kind: StitchKind, dx: i32, dy: i32) {
             StitchKind::Normal => {}
             StitchKind::Jump => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_JUMP]),
             StitchKind::ColorChange => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_COLOR]),
+            // Cut once, where the needle is, and jump the rest of the way.
+            StitchKind::Trim if k == 1 => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_TRIM]),
+            StitchKind::Trim => out.extend_from_slice(&[CTRL_ESCAPE, CTRL_JUMP]),
         }
         // y hacia abajo en el modelo, hacia arriba en el archivo.
         out.push((cur.0 - prev.0) as i8 as u8);

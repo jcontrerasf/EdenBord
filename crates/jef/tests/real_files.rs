@@ -1,7 +1,7 @@
 //! Pruebas con diseños reales de la carpeta indicada en `JEF_FIXTURES`
 //! (ver `.cargo/config.example.toml`). Sin la variable, se saltan.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use jef::StitchKind;
 
@@ -10,12 +10,11 @@ fn real_files() -> Vec<PathBuf> {
         eprintln!("JEF_FIXTURES no está definida, se saltan las pruebas con archivos reales");
         return vec![];
     };
-    let entries =
-        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("JEF_FIXTURES={}: {e}", dir.display()));
-    let mut files: Vec<_> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jef")))
-        .collect();
+    if !dir.is_dir() {
+        panic!("JEF_FIXTURES={} no es una carpeta", dir.display());
+    }
+    let mut files = Vec::new();
+    collect(&dir, &mut files);
     files.sort();
     assert!(
         !files.is_empty(),
@@ -23,6 +22,19 @@ fn real_files() -> Vec<PathBuf> {
         dir.display()
     );
     files
+}
+
+/// `.jef` and `.jef+` files under `dir`, including subfolders.
+fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+        let ext = path.extension().unwrap_or_default().to_string_lossy();
+        if path.is_dir() {
+            collect(&path, out);
+        } else if ext.eq_ignore_ascii_case("jef") || ext.eq_ignore_ascii_case("jef+") {
+            out.push(path);
+        }
+    }
 }
 
 #[test]
@@ -58,7 +70,9 @@ fn header_matches_contents() {
         );
 
         let words = design.count(StitchKind::Normal)
-            + 2 * (design.count(StitchKind::Jump) + design.count(StitchKind::ColorChange))
+            + 2 * (design.count(StitchKind::Jump)
+                + design.count(StitchKind::ColorChange)
+                + design.count(StitchKind::Trim))
             + 1;
         assert_eq!(header_i32(28) as usize, words, "{name}: puntadas");
 
@@ -82,7 +96,7 @@ fn sewn(jef: &jef::Jef) -> Vec<Segment> {
         match s.kind {
             StitchKind::ColorChange => block += 1,
             StitchKind::Normal => out.push((jef.colors[block], prev, (s.x, s.y))),
-            StitchKind::Jump => {}
+            StitchKind::Jump | StitchKind::Trim => {}
         }
         prev = (s.x, s.y);
     }
@@ -167,5 +181,25 @@ fn combining_designs_keeps_both() {
         let back = jef::read(&bytes).unwrap();
         assert_eq!(jef::write(&back), bytes, "{}", pair[1].display());
         assert_eq!(back.colors, combined.colors);
+    }
+}
+
+#[test]
+fn stripped_jef_plus_is_a_plain_jef() {
+    for path in real_files() {
+        let original = jef::read_file(&path).unwrap();
+        if !original.is_jef_plus() {
+            continue;
+        }
+        let name = path.display();
+        let mut d = original.clone();
+        d.strip_jef_plus();
+        assert!(!d.is_jef_plus() && d.trailing.is_empty(), "{name}");
+        let bytes = jef::write(&d);
+        let offset = i32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!(offset as usize, 116 + 8 * d.colors.len(), "{name}: offset");
+        let back = jef::read(&bytes).unwrap();
+        assert_eq!(back.stitches, original.stitches, "{name}: puntadas");
+        assert_eq!(jef::write(&back), bytes, "{name}: reescritura");
     }
 }

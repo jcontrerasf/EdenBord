@@ -29,10 +29,14 @@ fn main() {
         println!("  tamaño:    {w:.1} × {h:.1} mm");
         println!("  bastidor:  {}", design.header.hoop.name());
         println!("  fecha:     {date}");
+        if design.is_jef_plus() {
+            println!("  formato:   JEF+ (con objetos editables de Janome)");
+        }
         println!(
-            "  puntadas:  {}  saltos: {}  colores: {}",
+            "  puntadas:  {}  saltos: {}  cortes: {}  colores: {}",
             design.count(StitchKind::Normal),
             design.count(StitchKind::Jump),
+            design.count(StitchKind::Trim),
             design.colors.len()
         );
         for (i, block) in design.color_blocks().iter().enumerate() {

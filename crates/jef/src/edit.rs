@@ -356,7 +356,7 @@ mod tests {
             match s.kind {
                 ColorChange => block += 1,
                 Normal => out.push((jef.colors[block], prev, (s.x, s.y))),
-                Jump => {}
+                Jump | Trim => {}
             }
             prev = (s.x, s.y);
         }

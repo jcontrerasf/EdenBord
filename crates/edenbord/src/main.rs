@@ -113,6 +113,8 @@ enum Tool {
     Texto,
     /// Angle guides of an area satin: drag across the shape to add one.
     Guides,
+    /// Draw shapes (rectangle, polygon, star…): drag a box.
+    Shapes,
 }
 
 struct Editor {
@@ -125,6 +127,12 @@ struct Editor {
     about: bool,
     /// Bloque (JEF) u objeto (proyecto) cuyo color se está eligiendo.
     picking_color: Option<usize>,
+    /// The color being picked is that of the outline of `picking_color`.
+    picking_outline: bool,
+    /// Shape the shapes tool draws, with its parameters (the size is the dragged one).
+    shape: bordado::figuras::Shape,
+    /// Where the shape being drawn started (mm).
+    shape_from: Option<kurbo::Point>,
     /// Fuente de los textos nuevos: la última elegida (`None` = la del sistema).
     fuente: Option<bordado::fuentes::Fuente>,
     /// Texto que se está escribiendo en el lienzo (herramienta Texto).
@@ -205,6 +213,9 @@ impl Default for Editor {
             pending: None,
             about: false,
             picking_color: None,
+            picking_outline: false,
+            shape: bordado::figuras::Shape::all()[0].clone(),
+            shape_from: None,
             fuente: None,
             escritura: None,
             tool: Tool::Select,
@@ -505,6 +516,7 @@ impl Editor {
                 (Key::R, Tool::Ruler),
                 (Key::T, Tool::Texto),
                 (Key::G, Tool::Guides),
+                (Key::F, Tool::Shapes),
             ]
             .into_iter()
             .find(|&(k, _)| i.consume_key(Modifiers::NONE, k))
@@ -566,6 +578,13 @@ impl Editor {
         }
         if self.ruler.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.ruler = None;
+        }
+        // Shapes: Esc cancels the shape being drawn, or goes back to selecting.
+        if self.tool == Tool::Shapes
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+            && self.shape_from.take().is_none()
+        {
+            self.set_tool(Tool::Select);
         }
         let delete = ctx.input_mut(|i| {
             i.consume_key(Modifiers::NONE, Key::Delete)
@@ -905,12 +924,21 @@ impl Editor {
         } else if let Some(doc) = &self.proyecto {
             let obj = doc.proyecto.objetos.get(target);
             let n = doc.selection().len();
-            let title = if n > 1 && doc.seleccion.get(target) == Some(&true) {
-                format!("Color de {n} objetos")
+            let whose = if self.picking_outline {
+                "Color del contorno de"
             } else {
-                format!("Color de «{}»", obj.map_or("", |o| o.nombre.as_str()))
+                "Color de"
             };
-            (title, obj.map(|o| o.color))
+            let title = if n > 1 && doc.seleccion.get(target) == Some(&true) {
+                format!("{whose} {n} objetos")
+            } else {
+                format!("{whose} «{}»", obj.map_or("", |o| o.nombre.as_str()))
+            };
+            let color = obj.map(|o| match &o.outline {
+                Some(outline) if self.picking_outline => outline.color.unwrap_or(o.color),
+                _ => o.color,
+            });
+            (title, color)
         } else {
             (String::new(), None)
         };
@@ -919,12 +947,22 @@ impl Editor {
             return;
         };
         let mut open = true;
+        // `Some(None)` = the outline takes the object's thread.
         let mut chosen = None;
+        let outline = self.picking_outline && self.proyecto.is_some();
         egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
+                if outline
+                    && ui
+                        .button("Igual al objeto")
+                        .on_hover_text("El contorno usa el mismo hilo que el relleno")
+                        .clicked()
+                {
+                    chosen = Some(None);
+                }
                 egui::Grid::new("palette")
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
@@ -938,7 +976,7 @@ impl Editor {
                             }
                             let hover = format!("{} — Janome {} (n.º {i})", t.name, t.catalog);
                             if ui.add(button).on_hover_text(hover).clicked() {
-                                chosen = Some(i as i32);
+                                chosen = Some(Some(i as i32));
                             }
                             if i % 10 == 0 {
                                 ui.end_row();
@@ -948,6 +986,7 @@ impl Editor {
             });
         if let Some(c) = chosen {
             if let Some(doc) = &mut self.doc
+                && let Some(c) = c
                 && c != current
             {
                 doc.edit(|j| j.set_color(target, c));
@@ -958,7 +997,21 @@ impl Editor {
                     sel if sel.contains(&target) => sel,
                     _ => vec![target],
                 };
-                if sel.iter().any(|&i| doc.proyecto.objetos[i].color != c) {
+                if outline {
+                    let changes =
+                        |o: &bordado::Objeto| o.outline.as_ref().is_some_and(|l| l.color != c);
+                    if sel.iter().any(|&i| changes(&doc.proyecto.objetos[i])) {
+                        doc.edit(|p| {
+                            for i in sel {
+                                if let Some(l) = &mut p.objetos[i].outline {
+                                    l.color = c;
+                                }
+                            }
+                        });
+                    }
+                } else if let Some(c) = c
+                    && sel.iter().any(|&i| doc.proyecto.objetos[i].color != c)
+                {
                     doc.edit(|p| {
                         for i in sel {
                             p.objetos[i].color = c;
@@ -1045,6 +1098,9 @@ impl Editor {
         self.show_outlines = p.contornos;
         self.realista = p.realista;
         self.fuente = p.fuente;
+        if let Some(shape) = p.figura {
+            self.shape = shape;
+        }
         let [r, g, b] = p.tela;
         self.fabric = Color32::from_rgb(r, g, b);
         ctx.set_zoom_factor(p.zoom_ui.clamp(0.5, 3.0));
@@ -1060,6 +1116,7 @@ impl Editor {
             contornos: self.show_outlines,
             realista: self.realista,
             fuente: self.fuente.clone(),
+            figura: Some(self.shape.clone()),
             tela: [self.fabric.r(), self.fabric.g(), self.fabric.b()],
         }
     }

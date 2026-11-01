@@ -3,7 +3,7 @@
 
 use kurbo::{Affine, BezPath, Point, Shape};
 
-use crate::proyecto::{Forma, OPACIDAD_GUIA, Objeto, Puntada};
+use crate::proyecto::{Forma, Objeto, Puntada};
 
 /// Milímetros por unidad de usuario de SVG (96 por pulgada, como usan usvg y los navegadores).
 const MM_POR_PX: f64 = 25.4 / 96.0;
@@ -31,7 +31,7 @@ pub fn importar(data: &[u8]) -> Result<Vec<Objeto>, SvgError> {
         .iter()
         .filter_map(|o| match &o.forma {
             Forma::Contorno { d } | Forma::Linea { d } => Some(d.bounding_box()),
-            Forma::Texto { .. } => None,
+            Forma::Texto { .. } | Forma::Shape { .. } => None,
         })
         .reduce(|a, b| a.union(b));
     if let Some(caja) = caja {
@@ -115,18 +115,7 @@ fn objeto(p: &usvg::Path, n: usize) -> Option<Objeto> {
     } else {
         p.id().to_string()
     };
-    Some(Objeto {
-        nombre,
-        visible: true,
-        color,
-        forma,
-        puntada: Puntada::Ninguna,
-        opacidad: OPACIDAD_GUIA,
-        bloqueado: false,
-        guides: None,
-        cuts: None,
-        order: None,
-    })
+    Some(Objeto::new(nombre, color, forma, Puntada::Ninguna))
 }
 
 #[cfg(test)]

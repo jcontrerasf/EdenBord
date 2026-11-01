@@ -12,6 +12,7 @@ use crate::nodos::{self, Lado};
 use crate::{Editor, Tool, realista};
 
 mod guias;
+mod shapes;
 
 pub(crate) const SELECTION_COLOR: Color32 = Color32::from_rgb(30, 110, 230);
 const PEN_COLOR: Color32 = Color32::from_rgb(220, 0, 140);
@@ -98,7 +99,7 @@ impl Editor {
             Tool::Select => false,
             Tool::Pen | Tool::Nodes => self.proyecto.is_some(),
             Tool::Ruler => true,
-            Tool::Texto | Tool::Guides => self.proyecto.is_some(),
+            Tool::Texto | Tool::Guides | Tool::Shapes => self.proyecto.is_some(),
         }
     }
 
@@ -369,6 +370,7 @@ impl Editor {
             Tool::Nodes => self.nodes_input(ui, response, vista),
             Tool::Texto => self.text_input(ui, response, vista),
             Tool::Guides => self.guides_input(ui, response, vista),
+            Tool::Shapes => self.shapes_input(ui, response, vista),
             Tool::Ruler => {}
         }
 
@@ -455,7 +457,7 @@ impl Editor {
                 selected
             } else if !obj.visible {
                 continue;
-            } else if obj.puntada == bordado::Puntada::Ninguna {
+            } else if !obj.sews() {
                 guide
             } else if self.show_outlines {
                 outline
@@ -497,6 +499,7 @@ impl Editor {
             self.draw_pen(painter, response, vista);
         }
         self.draw_text_cursor(ui, painter, vista);
+        self.draw_shape_preview(ui, painter, vista);
         self.draw_gesture(painter, response, vista);
         if let Some(GestoNodo::Caja { a, b, .. }) = self.gesto_nodo {
             draw_box(painter, Rect::from_two_pos(vista.mm(a), vista.mm(b)));

@@ -1,9 +1,10 @@
 //! Proyectos de ejemplo, armados en código (así siguen al día con los tipos de puntada).
 
-use kurbo::{Affine, BezPath, Circle, Ellipse, Point, RoundedRect, Shape};
+use kurbo::{Affine, BezPath, Circle, Ellipse, Point, RoundedRect, Shape as _};
 
+use crate::figuras::Shape;
 use crate::fuentes::{self, Fuente};
-use crate::proyecto::{Forma, Lado, Motivo, OPACIDAD_GUIA, Objeto, PRESETS, Proyecto, Puntada};
+use crate::proyecto::{Forma, Lado, Motivo, Objeto, Outline, PRESETS, Proyecto, Puntada};
 use crate::{Grupo, geom, preset_por_nombre, texto};
 
 pub struct Ejemplo {
@@ -26,7 +27,7 @@ pub const EJEMPLOS: &[Ejemplo] = &[
     },
     Ejemplo {
         nombre: "Marco con texto",
-        descripcion: "Borde de festón, onda decorativa y un texto rellenado",
+        descripcion: "Rectángulo con contorno de festón, onda decorativa y un texto con relleno y contorno",
         crear: marco,
     },
 ];
@@ -37,18 +38,18 @@ fn color(rgb: [u8; 3]) -> i32 {
 }
 
 fn objeto(nombre: &str, color: i32, forma: Forma, puntada: Puntada) -> Objeto {
-    Objeto {
-        nombre: nombre.into(),
-        visible: true,
-        color,
-        forma,
-        puntada,
-        opacidad: OPACIDAD_GUIA,
-        bloqueado: false,
-        guides: None,
-        cuts: None,
-        order: None,
-    }
+    Objeto::new(nombre, color, forma, puntada)
+}
+
+/// A zone with only an outline (no fill).
+fn outline_only(nombre: &str, color: i32, forma: Forma, stitch: Puntada) -> Objeto {
+    let mut o = objeto(nombre, color, forma, preset_por_nombre("Relleno 45°"));
+    o.fill = false;
+    o.outline = Some(Outline {
+        stitch,
+        color: None,
+    });
+    o
 }
 
 fn zona(d: BezPath) -> Forma {
@@ -210,7 +211,7 @@ fn flor() -> Proyecto {
         }
         objetos.push(objeto(&format!("pétalo {}", k + 1), rosado, zona(d), p));
     }
-    objetos.push(objeto(
+    objetos.push(outline_only(
         "borde de los pétalos",
         rosado_oscuro,
         zona(bordes),
@@ -247,17 +248,24 @@ fn marco() -> Proyecto {
     let rojo = color([200, 30, 60]);
     let azul = color([40, 70, 140]);
     let mut objetos = vec![
-        objeto(
+        outline_only(
             "borde",
             azul,
-            zona(RoundedRect::new(-45.0, -30.0, 45.0, 30.0, 8.0).to_path(geom::TOLERANCIA)),
+            Forma::Shape {
+                shape: Shape::Rectangle {
+                    width: 90.0,
+                    height: 60.0,
+                    radius: 8.0,
+                },
+                afin: Affine::IDENTITY.as_coeffs(),
+            },
             Puntada::Feston {
                 ancho: 3.0,
                 separacion: 2.5,
                 lado: Lado::Izquierda,
             },
         ),
-        objeto(
+        outline_only(
             "onda",
             rojo,
             zona(RoundedRect::new(-38.0, -23.0, 38.0, 23.0, 5.0).to_path(geom::TOLERANCIA)),
@@ -275,14 +283,21 @@ fn marco() -> Proyecto {
         } else {
             f
         };
-        objetos.extend(texto_centrado(
+        let mut texto = texto_centrado(
             "EdenBord",
             &f,
             11.0,
             Point::ZERO,
             rojo,
             preset_por_nombre("Relleno horizontal"),
-        ));
+        );
+        if let Some(t) = &mut texto {
+            t.outline = Some(Outline {
+                stitch: preset_por_nombre("Pespunte"),
+                color: Some(azul),
+            });
+        }
+        objetos.extend(texto);
     }
     Proyecto {
         bastidor: jef::Hoop::A110x110.code(),

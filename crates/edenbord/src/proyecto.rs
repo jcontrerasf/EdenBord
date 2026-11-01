@@ -179,7 +179,7 @@ impl ProyectoDoc {
             .iter()
             .zip(&self.lineas)
             .map(|(o, pls)| {
-                if o.puntada == Puntada::Ninguna && o.es_zona() {
+                if !o.sews() && o.es_zona() {
                     trapecios(pls)
                 } else {
                     vec![]
@@ -431,7 +431,7 @@ impl ProyectoDoc {
     pub fn subpaths(&self, i: usize) -> usize {
         match &self.proyecto.objetos[i].forma {
             Forma::Contorno { d } | Forma::Linea { d } => geom::subtrazados(d).len(),
-            Forma::Texto { .. } => 0,
+            Forma::Texto { .. } | Forma::Shape { .. } => 0,
         }
     }
 
@@ -489,7 +489,7 @@ impl ProyectoDoc {
             .collect();
         if sel.len() < 2 {
             return Err(
-                "Selecciona al menos dos zonas (los textos se convierten primero en trazado)",
+                "Selecciona al menos dos zonas (los textos y las figuras se convierten primero en trazado)",
             );
         }
         let zonas = sel.iter().map(|&i| match &self.proyecto.objetos[i].forma {
@@ -622,7 +622,7 @@ impl ProyectoDoc {
     pub fn nodes(&self, i: usize) -> Option<Vec<nodos::Sub>> {
         match &self.proyecto.objetos.get(i)?.forma {
             Forma::Contorno { d } | Forma::Linea { d } => Some(nodos::desde_trazado(d)),
-            Forma::Texto { .. } => None,
+            Forma::Texto { .. } | Forma::Shape { .. } => None,
         }
     }
 
@@ -652,10 +652,43 @@ impl ProyectoDoc {
     }
 
     /// Convierte un texto en contorno (deja de depender de la fuente; se pueden editar nodos).
-    pub fn text_to_path(&mut self, i: usize) -> Result<(), String> {
+    /// Turns a text or a shape into an editable outline (same look).
+    pub fn convert_to_path(&mut self, i: usize) -> Result<(), String> {
         let d = self.proyecto.objetos[i].trazado()?;
         self.edit(|p| p.objetos[i].forma = Forma::Contorno { d });
         Ok(())
+    }
+
+    /// Moves the outline of each of `objects` that has one to an object of its own, right
+    /// after it: same shape, fill off. One undo; the new objects are left selected.
+    pub fn split_outline(&mut self, objects: &[usize]) {
+        let mut objects: Vec<usize> = objects
+            .iter()
+            .copied()
+            .filter(|&i| self.proyecto.objetos[i].outline.is_some())
+            .collect();
+        if objects.is_empty() {
+            return;
+        }
+        objects.sort_unstable();
+        self.edit(|p| {
+            for &i in objects.iter().rev() {
+                let o = &mut p.objetos[i];
+                let mut outline = o.clone();
+                o.outline = None;
+                outline.nombre = format!("{} · contorno", outline.nombre);
+                outline.fill = false;
+                outline.guides = None;
+                outline.cuts = None;
+                outline.order = None;
+                p.objetos.insert(i + 1, outline);
+            }
+        });
+        let mut seleccion = vec![false; self.proyecto.objetos.len()];
+        for (k, &i) in objects.iter().enumerate() {
+            seleccion[i + k + 1] = true;
+        }
+        self.seleccion = seleccion;
     }
 
     /// Edits the angle guides of object `i`. If it had none of its own (automatic), it gets
@@ -883,19 +916,11 @@ mod tests {
     use kurbo::BezPath;
 
     fn doc() -> ProyectoDoc {
-        let obj = |d: &str, puntada: Puntada| Objeto {
-            nombre: "x".into(),
-            visible: true,
-            color: 1,
-            forma: Forma::Contorno {
+        let obj = |d: &str, puntada: Puntada| {
+            let forma = Forma::Contorno {
                 d: BezPath::from_svg(d).unwrap(),
-            },
-            puntada,
-            opacidad: bordado::OPACIDAD_GUIA,
-            bloqueado: false,
-            guides: None,
-            cuts: None,
-            order: None,
+            };
+            Objeto::new("x", 1, forma, puntada)
         };
         let mut p = Proyecto::default();
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.
@@ -906,6 +931,29 @@ mod tests {
         p.objetos
             .push(obj("M12,12 L14,12 L14,14 L12,14 Z", Puntada::Ninguna));
         ProyectoDoc::new(None, "prueba".into(), p)
+    }
+
+    #[test]
+    fn split_outline_makes_an_outline_only_object_after_it() {
+        let mut d = doc();
+        let outline = bordado::Outline {
+            stitch: bordado::preset_por_nombre("Satín 2 mm"),
+            color: Some(7),
+        };
+        d.edit(|p| p.objetos[0].outline = Some(outline.clone()));
+        let before = d.generado.jef.stitches.clone();
+        d.split_outline(&[0, 1]);
+        assert_eq!(d.proyecto.objetos.len(), 3);
+        assert!(d.proyecto.objetos[0].outline.is_none());
+        let o = &d.proyecto.objetos[1];
+        assert_eq!(o.outline, Some(outline));
+        assert!(!o.fill);
+        assert_eq!(o.nombre, "x · contorno");
+        assert_eq!(d.selection(), vec![1]);
+        // Same stitches, now from two objects.
+        assert_eq!(d.generado.jef.stitches, before);
+        d.undo();
+        assert_eq!(d.proyecto.objetos.len(), 2);
     }
 
     #[test]

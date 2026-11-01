@@ -4,7 +4,7 @@
 use std::sync::OnceLock;
 
 use bordado::puntadas::Tramo;
-use bordado::{Forma, Grupo, OPACIDAD_GUIA, Objeto, PRESETS, Puntada};
+use bordado::{Forma, Grupo, Objeto, PRESETS, Puntada};
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use kurbo::BezPath;
 
@@ -44,22 +44,12 @@ fn objeto(grupo: Grupo, puntada: Puntada) -> Objeto {
         _ => LINEA,
     };
     let d = BezPath::from_svg(forma).expect("forma de muestra válida");
-    Objeto {
-        nombre: String::new(),
-        visible: true,
-        color: 1,
-        forma: if zona {
-            Forma::Contorno { d }
-        } else {
-            Forma::Linea { d }
-        },
-        puntada,
-        opacidad: OPACIDAD_GUIA,
-        bloqueado: false,
-        guides: None,
-        cuts: None,
-        order: None,
-    }
+    let forma = if zona {
+        Forma::Contorno { d }
+    } else {
+        Forma::Linea { d }
+    };
+    Objeto::new("", 1, forma, puntada)
 }
 
 /// Muestra la paleta y devuelve el preset elegido. `actual` es la puntada del objeto (la ficha
@@ -69,17 +59,18 @@ pub fn paleta(
     texturas: &Texturas,
     actual: &Puntada,
     color: Color32,
+    groups: &[(Grupo, &str)],
+    guide: bool,
     zonas: bool,
 ) -> Option<Puntada> {
     let mut elegido = None;
-    for (grupo, titulo) in [(Grupo::Linea, "Líneas"), (Grupo::Relleno, "Rellenos")] {
+    for (k, &(grupo, titulo)) in groups.iter().enumerate() {
         ui.label(egui::RichText::new(titulo).small().color(tema::TEXTO_SUAVE));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::splat(4.0);
             for (i, p) in PRESETS.iter().enumerate() {
-                // La guía va al principio de las líneas.
-                let en_grupo =
-                    p.grupo == grupo || (grupo == Grupo::Linea && p.grupo == Grupo::Guia);
+                // La guía va al principio del primer grupo.
+                let en_grupo = p.grupo == grupo || (guide && k == 0 && p.grupo == Grupo::Guia);
                 if !en_grupo {
                     continue;
                 }

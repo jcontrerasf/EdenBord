@@ -156,6 +156,12 @@ impl Editor {
                 ));
                 tools.push((Tool::Pen, iconos::PLUMA, "Pluma (P) · calcar contornos"));
                 tools.push((
+                    Tool::Shapes,
+                    iconos::FIGURAS,
+                    "Figuras (F) · arrastrar: dibujar · Shift: proporción natural · Ctrl: desde \
+                     el centro",
+                ));
+                tools.push((
                     Tool::Texto,
                     iconos::TEXTO,
                     "Texto (T) · clic: escribir ahí · clic en un texto: seguir escribiéndolo",
@@ -190,6 +196,9 @@ impl Editor {
         }
         if tool != Tool::Texto {
             self.finish_text();
+        }
+        if tool != Tool::Shapes {
+            self.shape_from = None;
         }
         if tool != Tool::Guides {
             self.selected_guide = None;

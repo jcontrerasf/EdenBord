@@ -6,6 +6,7 @@
 
 pub mod booleanas;
 pub mod ejemplos;
+pub mod figuras;
 pub mod fuentes;
 pub mod geom;
 mod proyecto;
@@ -19,8 +20,8 @@ use kurbo::{Affine, BezPath, Point};
 
 pub use proyecto::{
     BaseSatin, EXTENSION, FORMATO, FORMATO_ANTIGUO, FORMATO_PORTAPAPELES, Fondo, Forma, Grupo,
-    Lado, Motivo, OPACIDAD_GUIA, Objeto, PRESETS, Patron, Preset, Proyecto, ProyectoError, Puntada,
-    VERSION, copiar_objetos, pegar_objetos, preset_por_nombre,
+    Lado, Motivo, OPACIDAD_GUIA, Objeto, Outline, PRESETS, Patron, Preset, Proyecto, ProyectoError,
+    Puntada, VERSION, copiar_objetos, pegar_objetos, preset_por_nombre,
 };
 
 use geom::polilineas;
@@ -53,12 +54,18 @@ impl Objeto {
                 d.apply_affine(Affine::new(*afin));
                 Ok(d)
             }
+            Forma::Shape { shape, afin } => {
+                let mut d = shape.path();
+                d.apply_affine(Affine::new(*afin));
+                Ok(d)
+            }
         }
     }
 
     /// Tramos de puntadas en mm. `desde` es donde está la aguja.
     pub fn tramos(&self, desde: Point) -> Result<Vec<Tramo>, String> {
-        self.runs_with_warning(desde).map(|(runs, _)| runs)
+        self.parts(desde)
+            .map(|(parts, _)| parts.into_iter().flat_map(|p| p.runs).collect())
     }
 
     /// The angle guides of an area satin: its own, or the automatic ones.
@@ -116,35 +123,71 @@ impl Objeto {
         polilineas(&d).into_iter().map(|pl| pl.puntos).collect()
     }
 
-    /// Like [`tramos`](Self::tramos), plus a warning when part of the object can't be sewn.
-    fn runs_with_warning(&self, desde: Point) -> Result<(Vec<Tramo>, Option<String>), String> {
+    /// What it sews, in order: the fill (or line stitch) with the object's thread, then the
+    /// outline. Plus a warning when part of the object can't be sewn.
+    fn parts(&self, desde: Point) -> Result<(Vec<Part>, Option<String>), String> {
         let lineas = polilineas(&self.trazado()?);
+        let mut parts = Vec::new();
+        let mut warning = None;
+        let mut needle = desde;
+        if self.fill {
+            let (runs, w) = self.stitch_runs(&self.puntada, &lineas, needle);
+            warning = w;
+            needle = runs
+                .last()
+                .and_then(|t| t.last().copied())
+                .unwrap_or(needle);
+            parts.push(Part {
+                color: self.color,
+                runs,
+            });
+        }
+        if let Some(outline) = &self.outline
+            && self.es_zona()
+            && !outline.stitch.solo_zonas()
+        {
+            let (runs, _) = self.stitch_runs(&outline.stitch, &lineas, needle);
+            parts.push(Part {
+                color: outline.color.unwrap_or(self.color),
+                runs,
+            });
+        }
+        Ok((parts, warning))
+    }
+
+    /// The runs of `puntada` on this shape (`lineas` = its flattened path).
+    fn stitch_runs(
+        &self,
+        puntada: &Puntada,
+        lineas: &[geom::Polilinea],
+        desde: Point,
+    ) -> (Vec<Tramo>, Option<String>) {
         // Como en SVG, un trazado abierto se rellena como si estuviera cerrado.
         let anillos = || -> Vec<Vec<Point>> { lineas.iter().map(|pl| pl.puntos.clone()).collect() };
         let mut warning = None;
-        let runs = match self.puntada {
+        let runs = match *puntada {
             Puntada::Ninguna => vec![],
-            Puntada::Corrido { largo, pasadas } => puntadas::corrido(&lineas, largo, pasadas),
-            Puntada::Manual => puntadas::manual(&lineas),
-            Puntada::PuntoAtras { largo } => puntadas::punto_atras(&lineas, largo),
-            Puntada::Tallo { largo, ancho } => puntadas::tallo(&lineas, largo, ancho),
+            Puntada::Corrido { largo, pasadas } => puntadas::corrido(lineas, largo, pasadas),
+            Puntada::Manual => puntadas::manual(lineas),
+            Puntada::PuntoAtras { largo } => puntadas::punto_atras(lineas, largo),
+            Puntada::Tallo { largo, ancho } => puntadas::tallo(lineas, largo, ancho),
             Puntada::Feston {
                 ancho,
                 separacion,
                 lado,
-            } => puntadas::feston(&lineas, ancho, separacion, lado),
+            } => puntadas::feston(lineas, ancho, separacion, lado),
             Puntada::Motivo {
                 motivo,
                 largo,
                 ancho,
-            } => puntadas::motivo(&lineas, motivo, largo, ancho),
+            } => puntadas::motivo(lineas, motivo, largo, ancho),
             Puntada::Satin {
                 ancho,
                 densidad,
                 base,
                 compensacion,
                 ahusado,
-            } => puntadas::satin(&lineas, ancho, densidad, base, compensacion, ahusado),
+            } => puntadas::satin(lineas, ancho, densidad, base, compensacion, ahusado),
             Puntada::AreaSatin {
                 density,
                 base,
@@ -238,8 +281,14 @@ impl Objeto {
                 out
             }
         };
-        Ok((runs, warning))
+        (runs, warning)
     }
+}
+
+/// Part of an object sewn with one thread.
+struct Part {
+    color: i32,
+    runs: Vec<Tramo>,
 }
 
 /// Resultado de generar: el diseño y los avisos de objetos que no se pudieron bordar.
@@ -274,43 +323,50 @@ impl Proyecto {
             if !obj.visible {
                 continue;
             }
-            let tramos = match obj.runs_with_warning(aguja) {
-                Ok((t, warning)) => {
+            let parts = match obj.parts(aguja) {
+                Ok((parts, warning)) => {
                     if let Some(w) = warning {
                         avisos.push(format!("{}: {w}", obj.nombre));
                     }
-                    t
+                    parts
                 }
                 Err(e) => {
                     avisos.push(format!("{}: {e}", obj.nombre));
                     continue;
                 }
             };
-            let tramos: Vec<Vec<(i32, i32)>> = tramos
-                .iter()
-                .map(|t| {
-                    let mut q: Vec<_> = puntadas::con_remates(t).into_iter().map(decimas).collect();
-                    q.dedup();
-                    q
-                })
-                .filter(|t| t.len() > 1)
-                .collect();
-            if tramos.is_empty() {
+            for part in parts {
+                let tramos: Vec<Vec<(i32, i32)>> = part
+                    .runs
+                    .iter()
+                    .map(|t| {
+                        let mut q: Vec<_> =
+                            puntadas::con_remates(t).into_iter().map(decimas).collect();
+                        q.dedup();
+                        q
+                    })
+                    .filter(|t| t.len() > 1)
+                    .collect();
+                if tramos.is_empty() {
+                    continue;
+                }
+                if colors.last() != Some(&part.color) {
+                    if !colors.is_empty() {
+                        stitches.push(stitch(pos, StitchKind::ColorChange));
+                    }
+                    colors.push(part.color);
+                    objeto_de_bloque.push(i);
+                }
+                for t in tramos {
+                    if t[0] != pos {
+                        stitches.push(stitch(t[0], StitchKind::Jump));
+                    }
+                    stitches.extend(t[1..].iter().map(|&p| stitch(p, StitchKind::Normal)));
+                    pos = *t.last().unwrap();
+                }
+            }
+            if stitches.len() == inicio {
                 continue;
-            }
-            if colors.last() != Some(&obj.color) {
-                if !colors.is_empty() {
-                    stitches.push(stitch(pos, StitchKind::ColorChange));
-                }
-                colors.push(obj.color);
-                objeto_de_bloque.push(i);
-            }
-            for t in tramos {
-                if t[0] != pos {
-                    stitches.push(stitch(t[0], StitchKind::Jump));
-                }
-                stitches.extend(t[1..].iter().map(|&p| stitch(p, StitchKind::Normal)));
-                pos = *t.last().unwrap();
             }
             aguja = Point::new(f64::from(pos.0) / 10.0, f64::from(pos.1) / 10.0);
             rangos[i] = inicio..stitches.len();
@@ -363,6 +419,8 @@ mod tests {
             guides: None,
             cuts: None,
             order: None,
+            fill: true,
+            outline: None,
         }
     }
 
@@ -433,6 +491,69 @@ mod tests {
     }
 
     #[test]
+    fn outline_is_sewn_after_the_fill_with_its_own_thread() {
+        let square = "M-10,-10 L10,-10 L10,10 L-10,10 Z";
+        let mut o = objeto(square, 4, preset_por_nombre("Relleno 45°"));
+        o.outline = Some(Outline {
+            stitch: preset_por_nombre("Satín 2 mm"),
+            color: Some(9),
+        });
+        let mut p = Proyecto::default();
+        p.objetos.push(o.clone());
+        let g = p.generar();
+        assert!(g.avisos.is_empty());
+        assert_eq!(g.jef.colors, vec![4, 9]);
+        assert_eq!(g.objeto_de_bloque, vec![0, 0]);
+        assert_eq!(g.rangos[0], 0..g.jef.stitches.len());
+
+        // Same thread: no color change; fill off: only the outline.
+        p.objetos[0].outline.as_mut().unwrap().color = None;
+        assert_eq!(p.generar().jef.colors, vec![4]);
+        p.objetos[0].fill = false;
+        let outline_only = p.generar();
+        let mut satin = objeto(square, 4, preset_por_nombre("Satín 2 mm"));
+        satin.fill = true;
+        let mut q = Proyecto::default();
+        q.objetos.push(satin);
+        assert_eq!(outline_only.jef.stitches, q.generar().jef.stitches);
+
+        // Nothing at all: a valid empty design.
+        p.objetos[0].outline = None;
+        assert!(!p.objetos[0].sews());
+        assert!(p.generar().jef.stitches.is_empty());
+
+        // Lines have no outline.
+        let mut l = o;
+        l.forma = Forma::Linea {
+            d: BezPath::from_svg("M0,0 L20,0").unwrap(),
+        };
+        l.puntada = preset_por_nombre("Pespunte");
+        let mut p = Proyecto::default();
+        p.objetos.push(l);
+        assert_eq!(p.generar().jef.colors, vec![4]);
+    }
+
+    #[test]
+    fn shapes_generate() {
+        for shape in figuras::Shape::all() {
+            let mut o = objeto("M0,0", 2, preset_por_nombre("Relleno 45°"));
+            o.forma = Forma::Shape {
+                shape: shape.clone(),
+                afin: Affine::translate((5.0, 5.0)).as_coeffs(),
+            };
+            o.outline = Some(Outline {
+                stitch: preset_por_nombre("Satín 2 mm"),
+                color: None,
+            });
+            let mut p = Proyecto::default();
+            p.objetos.push(o);
+            let g = p.generar();
+            assert!(g.avisos.is_empty(), "{}", shape.name());
+            assert!(g.jef.count(StitchKind::Normal) > 100, "{}", shape.name());
+        }
+    }
+
+    #[test]
     fn hidden_guides_and_errors_produce_valid_empty_design() {
         let mut p = Proyecto::default();
         p.objetos.push(Objeto {
@@ -452,6 +573,8 @@ mod tests {
             guides: None,
             cuts: None,
             order: None,
+            fill: true,
+            outline: None,
         });
         let g = p.generar();
         assert_eq!(g.avisos.len(), 1);

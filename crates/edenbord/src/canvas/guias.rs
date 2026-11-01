@@ -46,7 +46,7 @@ impl Editor {
             return None;
         };
         let obj = &doc.proyecto.objetos[i];
-        let area = matches!(obj.puntada, Puntada::AreaSatin { .. });
+        let area = obj.fill && matches!(obj.puntada, Puntada::AreaSatin { .. });
         (area && !obj.bloqueado).then_some(i)
     }
 

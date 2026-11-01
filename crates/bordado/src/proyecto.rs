@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use kurbo::{Affine, BezPath, PathEl};
 use serde::{Deserialize, Serialize};
 
+use crate::figuras::Shape;
 use crate::fuentes::Fuente;
 
 /// Valor del campo `formato`, para reconocer el archivo.
@@ -18,7 +19,7 @@ pub const FORMATO_ANTIGUO: &str = "bordado";
 /// Extensión de los archivos de proyecto (sin punto).
 pub const EXTENSION: &str = "edenbord";
 /// Versión del formato que escribe esta librería.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// `formato` del texto que se copia al portapapeles (ver [`copiar_objetos`]).
 pub const FORMATO_PORTAPAPELES: &str = "edenbord-objetos";
 
@@ -80,6 +81,29 @@ pub struct Objeto {
     /// automatic (the closest to the needle first).
     #[serde(rename = "orden", default, skip_serializing_if = "Option::is_none")]
     pub order: Option<Vec<[f64; 2]>>,
+    /// Whether a zone's `puntada` (its fill) is sewn. Turning it off keeps its parameters.
+    #[serde(rename = "relleno", default = "si", skip_serializing_if = "is_true")]
+    pub fill: bool,
+    /// Line stitch along the border of a zone, sewn after the fill.
+    #[serde(rename = "contorno", default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<Outline>,
+}
+
+/// Outline of a zone: a line stitch along its border (satin, running stitch…).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Outline {
+    #[serde(rename = "puntada")]
+    pub stitch: Puntada,
+    /// Thread; `None` = the object's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<i32>,
+}
+
+impl Outline {
+    /// Outline a new one starts with.
+    pub fn default_stitch() -> Puntada {
+        preset_por_nombre("Satín 2 mm")
+    }
 }
 
 /// Opacidad con que se ven las guías si no se elige otra: muy traslúcidas.
@@ -99,6 +123,10 @@ fn si() -> bool {
 
 fn no(b: &bool) -> bool {
     !*b
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,6 +152,14 @@ pub enum Forma {
         #[serde(default)]
         espaciado: f64,
         /// Posición, giro y escala: lleva el texto (línea base en y = 0, desde x = 0) a su lugar.
+        afin: [f64; 6],
+    },
+    /// Parametric shape (rectangle, polygon, star…) that fills its box; `afin` carries its
+    /// position, rotation and mirror.
+    #[serde(rename = "figura")]
+    Shape {
+        #[serde(rename = "figura")]
+        shape: Shape,
         afin: [f64; 6],
     },
 }
@@ -735,11 +771,38 @@ impl Proyecto {
 }
 
 impl Objeto {
+    /// A new object with the defaults: visible, unlocked, automatic guides, no outline.
+    pub fn new(nombre: impl Into<String>, color: i32, forma: Forma, puntada: Puntada) -> Self {
+        Objeto {
+            nombre: nombre.into(),
+            visible: true,
+            color,
+            forma,
+            puntada,
+            opacidad: OPACIDAD_GUIA,
+            bloqueado: false,
+            guides: None,
+            cuts: None,
+            order: None,
+            fill: true,
+            outline: None,
+        }
+    }
+
+    /// Whether it sews anything: a fill (or line stitch) or an outline.
+    pub fn sews(&self) -> bool {
+        (self.fill && self.puntada != Puntada::Ninguna) || self.outline.is_some()
+    }
+
     /// Aplica una transformación (en mm) a la forma.
     pub fn transformar(&mut self, t: Affine) {
         match &mut self.forma {
             Forma::Contorno { d } | Forma::Linea { d } => d.apply_affine(t),
             Forma::Texto { afin, .. } => *afin = (t * Affine::new(*afin)).as_coeffs(),
+            Forma::Shape { shape, afin } => {
+                *afin = (t * Affine::new(*afin)).as_coeffs();
+                shape.normalize(afin);
+            }
         }
         let segments = self.guides.iter_mut().chain(&mut self.cuts).flatten();
         for p in segments.flatten().chain(self.order.iter_mut().flatten()) {
@@ -788,6 +851,7 @@ fn migrar(valor: &mut serde_json::Value) {
         {
             *fuente = serde_json::json!({ "ruta": ruta });
         }
+        let zone = o.pointer("/forma/tipo").and_then(Value::as_str) != Some("linea");
         let Some(p) = o.get_mut("puntada").and_then(Value::as_object_mut) else {
             continue;
         };
@@ -801,6 +865,17 @@ fn migrar(valor: &mut serde_json::Value) {
         {
             let base = if *b { "central" } else { "ninguna" };
             p.insert("base".into(), base.into());
+        }
+        // v2: a zone with a line stitch sewed its border → v3: fill off + that outline.
+        let line = serde_json::from_value::<Puntada>(Value::Object(p.clone()))
+            .is_ok_and(|x| x != Puntada::Ninguna && !x.solo_zonas());
+        if zone && line {
+            let stitch = Value::Object(std::mem::take(p));
+            let fill = serde_json::to_value(preset_por_nombre("Relleno 45°"))
+                .expect("a stitch can always be serialized");
+            o["puntada"] = fill;
+            o["relleno"] = false.into();
+            o["contorno"] = serde_json::json!({ "puntada": stitch });
         }
     }
 }
@@ -893,6 +968,8 @@ mod tests {
             guides: None,
             cuts: None,
             order: None,
+            fill: true,
+            outline: None,
         });
         p.objetos.push(Objeto {
             nombre: "texto".into(),
@@ -911,6 +988,8 @@ mod tests {
             guides: None,
             cuts: None,
             order: None,
+            fill: true,
+            outline: None,
         });
         let text = p.guardar();
         assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
@@ -963,6 +1042,8 @@ mod tests {
             guides: None,
             cuts: None,
             order: None,
+            fill: true,
+            outline: None,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert_eq!(pegar_objetos(&text), Some(vec![o]));
@@ -1100,6 +1181,8 @@ mod tests {
             guides: None,
             cuts: None,
             order: None,
+            fill: true,
+            outline: None,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert!(!text.contains("guias"), "automatic guides aren't written");
@@ -1128,6 +1211,75 @@ mod tests {
         assert_eq!(o.order, Some(vec![[1.0, 4.0]]));
         assert_eq!(o.guides, Some(vec![[[6.0, 3.0], [6.0, 5.0]]]));
         assert_eq!(o.cuts, Some(vec![[[4.0, 3.0], [4.0, 5.0]]]));
+    }
+
+    #[test]
+    fn version_2_zone_with_a_line_stitch_becomes_an_outline() {
+        let text = r#"{"formato":"edenbord","version":2,"bastidor":0,"objetos":[
+            {"nombre":"z","color":1,"forma":{"tipo":"contorno","d":"M0,0 L10,0 L10,10 Z"},
+             "puntada":{"tipo":"feston","ancho":3.0,"separacion":2.0,"lado":"izquierda"}},
+            {"nombre":"r","color":1,"forma":{"tipo":"contorno","d":"M0,0 L10,0 L10,10 Z"},
+             "puntada":{"tipo":"cuadrille","angulo":45.0,"separacion":3.0,"largo":3.0}},
+            {"nombre":"l","color":1,"forma":{"tipo":"linea","d":"M0,0 L10,0"},
+             "puntada":{"tipo":"satin","ancho":3.0,"densidad":0.4,"base":true}}]}"#;
+        let p = Proyecto::leer(text).unwrap();
+        let [z, r, l] = &p.objetos[..] else {
+            panic!("three objects");
+        };
+        assert!(!z.fill);
+        assert!(z.puntada.solo_zonas());
+        assert_eq!(
+            z.outline.as_ref().unwrap().stitch,
+            Puntada::Feston {
+                ancho: 3.0,
+                separacion: 2.0,
+                lado: Lado::Izquierda
+            }
+        );
+        assert!(r.fill && r.outline.is_none(), "fills don't change");
+        assert!(l.fill && l.outline.is_none(), "nor lines");
+        let text = p.guardar();
+        assert!(text.contains(r#""relleno": false"#));
+        assert_eq!(text.matches(r#""relleno":"#).count(), 1, "{text}");
+        assert_eq!(Proyecto::leer(&text).unwrap(), p, "idempotent");
+    }
+
+    #[test]
+    fn shapes_are_saved_and_transformed() {
+        let mut o = Objeto::new(
+            "estrella",
+            2,
+            Forma::Shape {
+                shape: Shape::Star {
+                    points: 5,
+                    inner: 0.5,
+                    width: 10.0,
+                    height: 8.0,
+                },
+                afin: Affine::IDENTITY.as_coeffs(),
+            },
+            Puntada::Ninguna,
+        );
+        o.outline = Some(Outline {
+            stitch: Outline::default_stitch(),
+            color: Some(5),
+        });
+        let text = copiar_objetos(std::slice::from_ref(&o));
+        assert!(
+            text.contains(r#""forma":{"tipo":"figura","figura":{"tipo":"estrella","puntas":5"#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#""contorno":{"puntada":{"tipo":"satin""#),
+            "{text}"
+        );
+        assert_eq!(pegar_objetos(&text), Some(vec![o.clone()]));
+        o.transformar(Affine::translate((1.0, 2.0)) * Affine::scale(2.0));
+        let Forma::Shape { shape, afin } = &o.forma else {
+            panic!("still a shape");
+        };
+        assert_eq!(shape.size(), (20.0, 16.0));
+        assert_eq!(*afin, Affine::translate((1.0, 2.0)).as_coeffs());
     }
 
     #[test]

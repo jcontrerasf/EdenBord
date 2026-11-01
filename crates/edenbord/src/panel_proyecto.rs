@@ -1,7 +1,10 @@
 //! Panel derecho de un proyecto `.edenbord` (objetos y propiedades), guardar y exportar.
 
+use bordado::figuras::{MAX_SIDES, MIN_SIDES, Shape};
 use bordado::fuentes::Fuente;
-use bordado::{BaseSatin, Fondo, Forma, Lado, Motivo, Objeto, Patron, Proyecto, Puntada};
+use bordado::{
+    BaseSatin, Fondo, Forma, Grupo, Lado, Motivo, Objeto, Outline, Patron, Proyecto, Puntada,
+};
 use eframe::egui::{self, Color32, Vec2};
 use jef::{Hoop, StitchKind};
 
@@ -42,6 +45,7 @@ impl Editor {
                         let doc = self.proyecto.as_mut().unwrap();
                         if let Some(i) = objects_section(ui, doc) {
                             self.picking_color = Some(i);
+                            self.picking_outline = false;
                         }
                     })
                     .inner
@@ -54,8 +58,13 @@ impl Editor {
                 ui.add_space(6.0);
                 let doc = self.proyecto.as_mut().unwrap();
                 let texturas = self.texturas.get_or_insert_with(|| Texturas::new(ui.ctx()));
-                if let Some(path) = properties_section(ui, doc, texturas, &mut self.picking_color) {
+                let mut pick = None;
+                if let Some(path) = properties_section(ui, doc, texturas, &mut pick) {
                     self.change_font(path);
+                }
+                if let Some((i, outline)) = pick {
+                    self.picking_color = Some(i);
+                    self.picking_outline = outline;
                 }
                 ui.separator();
                 tema::titulo(ui, "Diseño");
@@ -187,18 +196,7 @@ impl Editor {
         } else {
             (format!("línea {n}"), Forma::Linea { d })
         };
-        doc.add(vec![Objeto {
-            nombre,
-            visible: true,
-            color: 1,
-            forma,
-            puntada: Puntada::Ninguna,
-            opacidad: bordado::OPACIDAD_GUIA,
-            bloqueado: false,
-            guides: None,
-            cuts: None,
-            order: None,
-        }]);
+        doc.add(vec![Objeto::new(nombre, 1, forma, Puntada::Ninguna)]);
         self.pen = Default::default();
     }
 
@@ -388,7 +386,8 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
         return None;
     }
     let mut pick = None;
-    // (objeto, acción): 0 borrar, 1 duplicar, 2 ver/ocultar, 3 bloquear/desbloquear.
+    // (objeto, acción): 0 borrar, 1 duplicar, 2 ver/ocultar, 3 bloquear/desbloquear,
+    // 4 separar el contorno.
     let mut action: Option<(usize, u8)> = None;
     let mut gap = None;
     // Nombre en edición (doble clic o «Cambiar nombre»): objeto y texto.
@@ -402,7 +401,7 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
         let [r, g, b] = jef::palette::thread(obj.color).map_or([128; 3], |t| t.rgb);
         let icon = icono_puntada(&obj.puntada);
         let mut label = egui::RichText::new(&obj.nombre);
-        if obj.puntada == Puntada::Ninguna {
+        if !obj.sews() {
             label = label.italics().color(tema::TEXTO_SUAVE);
         }
         if !obj.visible {
@@ -412,6 +411,7 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             Forma::Contorno { .. } => "zona",
             Forma::Linea { .. } => "línea",
             Forma::Texto { .. } => "texto",
+            Forma::Shape { ref shape, .. } => shape.name(),
         };
         let hover = format!(
             "{}. {forma} · {} · doble clic: cambiar el nombre · arrastrar: cambiar el orden de \
@@ -494,6 +494,13 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
             {
                 action = Some((i, 1));
             }
+            if doc.proyecto.objetos[i].outline.is_some()
+                && ui
+                    .button(format!("{} Separar contorno", iconos::SEPARAR))
+                    .clicked()
+            {
+                action = Some((i, 4));
+            }
             if ui.button(format!("{} Borrar", iconos::BORRAR)).clicked() {
                 action = Some((i, 0));
             }
@@ -524,21 +531,22 @@ fn objects_section(ui: &mut egui::Ui, doc: &mut crate::proyecto::ProyectoDoc) ->
         Some((i, 0)) => doc.remove(i),
         Some((i, 1)) => doc.duplicate(i),
         Some((i, 2)) => doc.edit(|p| p.objetos[i].visible = !p.objetos[i].visible),
+        Some((i, 4)) => doc.split_outline(&[i]),
         Some((i, _)) => doc.edit(|p| p.objetos[i].bloqueado = !p.objetos[i].bloqueado),
         None => {}
     }
     pick
 }
 
-/// Nombre, forma y puntada de la selección. Devuelve `Some` si se pidió cambiar la fuente.
 /// Propiedades de la selección. Con varios objetos, los cambios de parámetros se aplican a
 /// los que tienen el mismo tipo de puntada que el primero (solo el valor cambiado).
-/// `pick_color` recibe el objeto cuyo color se quiere cambiar.
+/// `pick` recibe el objeto cuyo color se quiere cambiar, y si es el del contorno.
+/// Devuelve `Some` si se pidió cambiar la fuente.
 fn properties_section(
     ui: &mut egui::Ui,
     doc: &mut crate::proyecto::ProyectoDoc,
     texturas: &Texturas,
-    pick_color: &mut Option<usize>,
+    pick: &mut Option<(usize, bool)>,
 ) -> Option<Pedido> {
     let sel = doc.selection();
     if sel.is_empty() {
@@ -553,69 +561,29 @@ fn properties_section(
             format!("Propiedades · {} objetos", sel.len())
         },
     );
-
-    // Tipo de puntada: se aplica a toda la selección (los rellenos solo a zonas).
-    let first = &doc.proyecto.objetos[sel[0]];
-    let [r, g, b] = jef::palette::thread(first.color).map_or([128; 3], |t| t.rgb);
-    let zonas = sel.iter().any(|&i| doc.proyecto.objetos[i].es_zona());
-    ui.horizontal(|ui| {
-        ui.label("Puntada");
-        ui.strong(format!(
-            "{} {}",
-            icono_puntada(&first.puntada),
-            first.puntada.nombre()
-        ));
-    });
-    let chosen = paleta::paleta(
-        ui,
-        texturas,
-        &first.puntada,
-        Color32::from_rgb(r, g, b),
-        zonas,
-    );
-    if let Some(p) = chosen {
-        doc.edit(|proj| {
-            for &i in &sel {
-                let o = &mut proj.objetos[i];
-                if o.es_zona() || !p.solo_zonas() {
-                    o.puntada = p.clone();
-                }
-            }
+    if let [i] = sel[..] {
+        let mut nombre = doc.proyecto.objetos[i].nombre.clone();
+        ui.horizontal(|ui| {
+            ui.label("Nombre");
+            ui.text_edit_singleline(&mut nombre);
         });
-    }
-    if sel.iter().any(|&i| !doc.proyecto.objetos[i].es_zona())
-        && doc.proyecto.objetos[sel[0]].puntada.solo_zonas()
-    {
-        ui.colored_label(WARNING, "Las líneas no se pueden rellenar");
-    }
-
-    if sel.len() > 1 {
-        let [r, g, b] =
-            jef::palette::thread(doc.proyecto.objetos[sel[0]].color).map_or([128; 3], |t| t.rgb);
+        if nombre != doc.proyecto.objetos[i].nombre {
+            doc.edit_grouped(format!("nombre {i}"), |p| p.objetos[i].nombre = nombre);
+        }
+    } else {
         ui.horizontal(|ui| {
             ui.label("Color");
             let swatch = egui::Button::new("")
-                .fill(Color32::from_rgb(r, g, b))
+                .fill(thread_color(doc.proyecto.objetos[sel[0]].color))
                 .min_size(Vec2::new(20.0, 18.0));
             if ui
                 .add(swatch)
                 .on_hover_text("Cambiar el color de todos")
                 .clicked()
             {
-                *pick_color = Some(sel[0]);
+                *pick = Some((sel[0], false));
             }
         });
-        let antes = doc.proyecto.objetos[sel[0]].puntada.clone();
-        let mismos = sel
-            .iter()
-            .filter(|&&i| doc.proyecto.objetos[i].puntada.tipo() == antes.tipo())
-            .count();
-        if mismos < sel.len() && antes != Puntada::Ninguna {
-            ui.weak(format!(
-                "Los cambios se aplican a los {mismos} objetos con «{}»",
-                antes.nombre()
-            ));
-        }
         let guias: Vec<usize> = sel
             .iter()
             .copied()
@@ -631,31 +599,25 @@ fn properties_section(
                 });
             }
         }
-        let mut despues = antes.clone();
-        puntada_params(ui, &mut despues);
-        if despues != antes {
-            doc.edit_grouped("props varios".into(), |p| {
-                for &i in &sel {
-                    p.objetos[i].puntada.copiar_cambios(&antes, &despues);
-                }
-            });
-        }
+    }
+
+    stitch_section(ui, doc, &sel, texturas, pick);
+    if sel.len() > 1 {
         return None;
     }
+
     let i = sel[0];
     let mut obj = doc.proyecto.objetos[i].clone();
     let mut font = None;
     let mut to_path = false;
-    ui.horizontal(|ui| {
-        ui.label("Nombre");
-        ui.text_edit_singleline(&mut obj.nombre);
-    });
     if es_guia_zona(&obj) {
         opacity_slider(ui, &mut obj.opacidad);
     }
-    puntada_params(ui, &mut obj.puntada);
-    if matches!(obj.puntada, Puntada::AreaSatin { .. }) {
+    if obj.fill && matches!(obj.puntada, Puntada::AreaSatin { .. }) {
         guides_row(ui, &mut obj, doc.guides[i].len(), doc.cuts[i].len());
+    }
+    if matches!(obj.forma, Forma::Texto { .. } | Forma::Shape { .. }) {
+        ui.separator();
     }
     if let Forma::Texto {
         texto,
@@ -684,16 +646,6 @@ fn properties_section(
             );
         });
         font = selector_fuente::selector(ui, fuente, texto);
-        if ui
-            .add_enabled(
-                !doc.lineas[i].is_empty(),
-                egui::Button::new("Convertir en trazado"),
-            )
-            .on_hover_text("Pasa a ser un contorno: se pueden editar sus nodos, ya no el texto")
-            .clicked()
-        {
-            to_path = true;
-        }
         if *alto < 6.0 {
             ui.colored_label(
                 WARNING,
@@ -704,14 +656,333 @@ fn properties_section(
             );
         }
     }
+    if let Forma::Shape { shape, .. } = &mut obj.forma {
+        shape_params(ui, shape);
+    }
+    if matches!(obj.forma, Forma::Texto { .. } | Forma::Shape { .. })
+        && ui
+            .add_enabled(
+                !doc.lineas[i].is_empty(),
+                egui::Button::new(format!("{} Convertir en trazado", iconos::NODOS)),
+            )
+            .on_hover_text("Pasa a ser un contorno: se pueden editar sus nodos, ya no sus medidas")
+            .clicked()
+    {
+        to_path = true;
+    }
     if obj != doc.proyecto.objetos[i] {
         doc.edit_grouped(format!("props {i}"), |p| p.objetos[i] = obj);
     }
-    // El botón solo está activo si el texto ya se pudo trazar: convertir no falla.
+    // El botón solo está activo si la forma ya se pudo trazar: convertir no falla.
     if to_path {
-        let _ = doc.text_to_path(i);
+        let _ = doc.convert_to_path(i);
     }
     font
+}
+
+fn thread_color(color: i32) -> Color32 {
+    let [r, g, b] = jef::palette::thread(color).map_or([128; 3], |t| t.rgb);
+    Color32::from_rgb(r, g, b)
+}
+
+/// Stitch of the selection: for zones, fill and outline; for lines (or a mix), the stitch.
+fn stitch_section(
+    ui: &mut egui::Ui,
+    doc: &mut crate::proyecto::ProyectoDoc,
+    sel: &[usize],
+    texturas: &Texturas,
+    pick: &mut Option<(usize, bool)>,
+) {
+    let objs = &doc.proyecto.objetos;
+    let first = &objs[sel[0]];
+    let color = thread_color(first.color);
+    let zones = sel.iter().filter(|&&i| objs[i].es_zona()).count();
+    ui.separator();
+    if zones < sel.len() {
+        // Lines, or lines and zones: the stitch as always (fills only go to the zones).
+        ui.horizontal(|ui| {
+            ui.label("Puntada");
+            ui.strong(format!(
+                "{} {}",
+                icono_puntada(&first.puntada),
+                first.puntada.nombre()
+            ));
+        });
+        let groups: &[_] = if zones == 0 {
+            &[(Grupo::Linea, "Líneas")]
+        } else {
+            &[(Grupo::Linea, "Líneas"), (Grupo::Relleno, "Rellenos")]
+        };
+        let chosen = paleta::paleta(ui, texturas, &first.puntada, color, groups, true, zones > 0);
+        if let Some(p) = chosen {
+            doc.edit(|proj| {
+                for &i in sel {
+                    let o = &mut proj.objetos[i];
+                    if o.es_zona() == p.solo_zonas() || p == Puntada::Ninguna {
+                        o.puntada = p.clone();
+                    }
+                }
+            });
+        }
+        if zones > 0 && doc.proyecto.objetos[sel[0]].puntada.solo_zonas() {
+            ui.colored_label(WARNING, "Las líneas no se pueden rellenar");
+        }
+        ui.push_id("puntada", |ui| {
+            stitch_params(ui, doc, sel, "props puntada", |o| Some(&mut o.puntada));
+        });
+        return;
+    }
+
+    // Fill.
+    let mut fill = first.fill;
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut fill, "Relleno").on_hover_text(
+            "Desactivado, la zona no se rellena (sirve para dejar solo el contorno)",
+        );
+        if fill {
+            ui.strong(format!(
+                "{} {}",
+                icono_puntada(&first.puntada),
+                first.puntada.nombre()
+            ));
+        }
+    });
+    if fill != first.fill {
+        doc.edit(|p| {
+            for &i in sel {
+                p.objetos[i].fill = fill;
+            }
+        });
+    }
+    if fill {
+        let actual = doc.proyecto.objetos[sel[0]].puntada.clone();
+        let groups = &[(Grupo::Relleno, "Rellenos")];
+        if let Some(p) = paleta::paleta(ui, texturas, &actual, color, groups, true, true) {
+            doc.edit(|proj| {
+                for &i in sel {
+                    proj.objetos[i].puntada = p.clone();
+                }
+            });
+        }
+        ui.push_id("relleno", |ui| {
+            stitch_params(ui, doc, sel, "props relleno", |o| Some(&mut o.puntada));
+        });
+    }
+
+    // Outline.
+    ui.separator();
+    let first = &doc.proyecto.objetos[sel[0]];
+    let mut on = first.outline.is_some();
+    let outline_color = first
+        .outline
+        .as_ref()
+        .map_or(color, |o| thread_color(o.color.unwrap_or(first.color)));
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut on, "Contorno")
+            .on_hover_text("Una línea por el borde, que se borda después del relleno");
+        if let Some(o) = &first.outline {
+            if tema::muestra(ui, outline_color)
+                .on_hover_text("Color del contorno")
+                .clicked()
+            {
+                *pick = Some((sel[0], true));
+            }
+            ui.strong(format!(
+                "{} {}",
+                icono_puntada(&o.stitch),
+                o.stitch.nombre()
+            ));
+        }
+    });
+    if on != first.outline.is_some() {
+        doc.edit(|p| {
+            for &i in sel {
+                p.objetos[i].outline = on.then(|| Outline {
+                    stitch: Outline::default_stitch(),
+                    color: None,
+                });
+            }
+        });
+    }
+    let Some(outline) = doc.proyecto.objetos[sel[0]].outline.clone() else {
+        return;
+    };
+    let antes = outline.stitch;
+    let mut despues = antes.clone();
+    thickness_row(ui, &mut despues);
+    let groups = &[(Grupo::Linea, "Líneas")];
+    if let Some(p) = paleta::paleta(ui, texturas, &antes, outline_color, groups, false, true) {
+        doc.edit(|proj| {
+            for &i in sel {
+                if let Some(o) = &mut proj.objetos[i].outline {
+                    o.stitch = p.clone();
+                }
+            }
+        });
+        return;
+    }
+    ui.push_id("contorno", |ui| {
+        egui::CollapsingHeader::new("Ajustes del contorno").show(ui, |ui| {
+            puntada_params(ui, &mut despues);
+        });
+    });
+    if despues != antes {
+        doc.edit_grouped("props contorno".into(), |p| {
+            for &i in sel {
+                if let Some(o) = &mut p.objetos[i].outline {
+                    o.stitch.copiar_cambios(&antes, &despues);
+                }
+            }
+        });
+    }
+    if ui
+        .button(format!("{} Separar contorno", iconos::SEPARAR))
+        .on_hover_text(
+            "Pasa el contorno a un objeto aparte, justo después: se puede ordenar, ocultar o \
+             bloquear por separado",
+        )
+        .clicked()
+    {
+        doc.split_outline(sel);
+    }
+}
+
+/// Parameters of the stitch that `get` picks from each selected object. With several, the
+/// changes go to those with the same type of stitch as the first (only the changed value).
+fn stitch_params(
+    ui: &mut egui::Ui,
+    doc: &mut crate::proyecto::ProyectoDoc,
+    sel: &[usize],
+    key: &str,
+    get: fn(&mut Objeto) -> Option<&mut Puntada>,
+) {
+    let mut first = doc.proyecto.objetos[sel[0]].clone();
+    let Some(antes) = get(&mut first).cloned() else {
+        return;
+    };
+    if sel.len() > 1 {
+        let mismos = sel
+            .iter()
+            .filter(|&&i| {
+                let mut o = doc.proyecto.objetos[i].clone();
+                get(&mut o).is_some_and(|p| p.tipo() == antes.tipo())
+            })
+            .count();
+        if mismos < sel.len() && antes != Puntada::Ninguna {
+            ui.weak(format!(
+                "Los cambios se aplican a los {mismos} objetos con «{}»",
+                antes.nombre()
+            ));
+        }
+    }
+    let mut despues = antes.clone();
+    puntada_params(ui, &mut despues);
+    if despues != antes {
+        doc.edit_grouped(key.into(), |p| {
+            for &i in sel {
+                if let Some(x) = get(&mut p.objetos[i]) {
+                    x.copiar_cambios(&antes, &despues);
+                }
+            }
+        });
+    }
+}
+
+/// "Grosor" of a line stitch: its width, or the passes of a running stitch.
+fn thickness_row(ui: &mut egui::Ui, p: &mut Puntada) {
+    ui.horizontal(|ui| {
+        let ayuda = "Ancho de la línea del contorno";
+        match p {
+            Puntada::Satin { ancho, .. }
+            | Puntada::Tallo { ancho, .. }
+            | Puntada::Feston { ancho, .. }
+            | Puntada::Motivo { ancho, .. } => {
+                ui.label("Grosor").on_hover_text(ayuda);
+                ui.add(
+                    egui::DragValue::new(ancho)
+                        .range(0.3..=12.0)
+                        .speed(0.02)
+                        .suffix(" mm"),
+                )
+                .on_hover_text(ayuda);
+            }
+            Puntada::Corrido { pasadas, .. } => {
+                ui.label("Grosor")
+                    .on_hover_text("Veces que se cose cada puntada");
+                for (n, nombre) in [(1, "Fino"), (3, "Triple"), (5, "Grueso")] {
+                    ui.selectable_value(pasadas, n, nombre);
+                }
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Measures and parameters of a parametric shape.
+fn shape_params(ui: &mut egui::Ui, shape: &mut Shape) {
+    egui::Grid::new("figura").num_columns(2).show(ui, |ui| {
+        ui.label("Figura");
+        egui::ComboBox::from_id_salt("tipo figura")
+            .selected_text(shape.name())
+            .show_ui(ui, |ui| {
+                for f in Shape::all() {
+                    if ui.selectable_label(shape.same_kind(&f), f.name()).clicked()
+                        && !shape.same_kind(&f)
+                    {
+                        let (w, h) = shape.size();
+                        *shape = f.with_size(w, h);
+                    }
+                }
+            });
+        ui.end_row();
+        fn mm(v: &mut f64) -> egui::DragValue<'_> {
+            egui::DragValue::new(v)
+                .range(0.5..=400.0)
+                .speed(0.1)
+                .suffix(" mm")
+        }
+        let (w, h) = shape.size_mut();
+        ui.label("Ancho");
+        ui.add(mm(w));
+        ui.end_row();
+        ui.label("Alto");
+        ui.add(mm(h));
+        ui.end_row();
+        let min_side = {
+            let (w, h) = shape.size();
+            w.min(h)
+        };
+        match shape {
+            Shape::Rectangle { radius, .. } => {
+                ui.label("Esquinas");
+                ui.add(
+                    egui::DragValue::new(radius)
+                        .range(0.0..=min_side / 2.0)
+                        .speed(0.05)
+                        .suffix(" mm"),
+                )
+                .on_hover_text("Radio de las esquinas redondeadas (0 = rectas)");
+                ui.end_row();
+            }
+            Shape::Polygon { sides, .. } => {
+                ui.label("Lados");
+                ui.add(egui::Slider::new(sides, MIN_SIDES..=MAX_SIDES));
+                ui.end_row();
+            }
+            Shape::Star { points, inner, .. } => {
+                ui.label("Puntas");
+                ui.add(egui::Slider::new(points, MIN_SIDES..=MAX_SIDES));
+                ui.end_row();
+                ui.label("Interior");
+                ui.add(egui::Slider::new(inner, 0.1..=0.95).fixed_decimals(2))
+                    .on_hover_text(
+                        "Qué tan adentro van las esquinas interiores: menos = puntas más finas",
+                    );
+                ui.end_row();
+            }
+            _ => {}
+        }
+    });
 }
 
 /// Angle guides of an area satin: how many there are (and cuts), whether they are automatic,
@@ -739,7 +1010,7 @@ fn guides_row(ui: &mut egui::Ui, obj: &mut Objeto, count: usize, cuts: usize) {
 
 /// Una guía que es zona: se ve rellena con su color de hilo y esta opacidad.
 fn es_guia_zona(o: &Objeto) -> bool {
-    o.puntada == Puntada::Ninguna && o.es_zona()
+    !o.sews() && o.es_zona()
 }
 
 /// Opacidad del relleno de una guía. Devuelve si cambió.

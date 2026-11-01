@@ -96,7 +96,13 @@ bastidor. El orden de `objetos` es el orden de bordado. Los proyectos antiguos (
 ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto literal.
 
 - `Objeto { nombre, visible, color (paleta Janome), forma, puntada, opacidad, bloqueado,
-  guides, cuts }`. `guides` (JSON `guias`, `Option`: se omite si es `None` = automáticas; `[]` =
+  guides, cuts, order, fill, outline }` (`Objeto::new` pone los valores por defecto).
+  `fill` (JSON `relleno`, solo se escribe si es `false`): si se borda `puntada`; apagarlo
+  conserva los parámetros. `outline` (JSON `contorno`, `Option`, solo zonas):
+  `Outline {stitch (JSON puntada, de línea), color: Option (None = el del objeto)}`, se borda
+  después del relleno (`Objeto::parts` → `Part {color, runs}`; `generar` cambia de hilo dentro
+  del objeto si hace falta). En una zona `puntada` es solo relleno o `Ninguna`; una zona es
+  guía si no borda nada (`Objeto::sews`). `guides` (JSON `guias`, `Option`: se omite si es `None` = automáticas; `[]` =
   a mano sin ninguna, cada columna usa solo sus extremos automáticos): guías de ángulo del
   satín de zona, segmentos `[[x,y],[x,y]]` en mm absolutos; `transformar` también las mueve.
   `cuts` (JSON `cortes`, `Option`: se omite si es `None` = automáticos; `[]` = sin cortes):
@@ -106,7 +112,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
   `OPACIDAD_GUIA` = 0,15). `bloqueado` (solo se escribe si es `true`): no se elige en el lienzo.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
-  `texto {texto, fuente, alto (mayúsculas, mm), espaciado, afin [6]}`; `fuente` =
+  `texto {texto, fuente, alto (mayúsculas, mm), espaciado, afin [6]}` |
+  `figura {figura, afin}` (`Forma::Shape`, `figuras.rs`: `Shape` = rectangulo {ancho, alto,
+  radio} | elipse | poligono {lados 3..=12} | estrella {puntas, interior} | corazon | gota |
+  flecha | hoja; `path()` llena exacto la caja ancho × alto centrada en el origen, `ratio()` =
+  proporción natural; `afin` = posición/giro/espejo: `transformar` compone y `normalize` pasa
+  la escala a ancho/alto si no hay sesgo); `fuente` =
   `fuentes::Fuente {familia?, peso, cursiva, ruta?}` (familia del sistema por nombre, con la
   ruta de respaldo; o solo `ruta` = archivo propio). v1 guardaba la ruta como texto: `migrar`. `d` es el `d` de
   SVG (kurbo `BezPath`), guardado con 3 decimales. Transformar un texto compone su `afin`.
@@ -121,8 +132,9 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `concentrico {separacion, largo}` (anillos con `i_overlay` outline), `cuadrille`.
   `PRESETS` = la paleta: `Preset {nombre, descripcion, grupo: Guia|Linea|Relleno, puntada}`;
   `preset_por_nombre`.
-- Formato **versión 2**. `migrar()` pasa el JSON v1 (`corrido.triple`, `satin.base` bool) a v2
-  mirando la forma de los campos (idempotente); se usa al leer proyectos y al pegar.
+- Formato **versión 3**. `migrar()` pasa el JSON v1 (`corrido.triple`, `satin.base` bool) y v2
+  (zona con puntada de línea → `relleno: false` + `contorno` con esa puntada) mirando la forma
+  de los campos (idempotente); se usa al leer proyectos y al pegar.
 - Helpers de `geom`: `Arco` (punto y tangente por largo de arco), `normal` (izquierda del
   avance, con y hacia abajo).
 - `Proyecto::generar()` → `Generado { jef, objeto_de_bloque, avisos }`: cada objeto da tramos
@@ -229,8 +241,18 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `set_nodes_live` (solo polilíneas) mientras, `sync` al soltar. Doble clic = insertar,
   Supr = borrar (mínimo 3 cerrado / 2 abierto), "Esquina ↔ curva". Textos: "Convertir en
   trazado".
+- Herramienta Figuras (`Tool::Shapes`, F; `canvas/shapes.rs`): arrastrar dibuja
+  `Editor.shape` (la última elegida con sus parámetros, en preferencias) en la caja
+  (`shape_box`: Shift = proporción natural, Ctrl = desde el centro), clic = tamaño estándar;
+  entra como guía. Barra contextual: figura y lados/puntas/interior/radio. El panel edita
+  figura, medidas y parámetros; «Convertir en trazado» (`convert_to_path`, también para textos
+  y en la barra de Nodos). Combinar y booleanas solo toman contornos.
+- Panel de propiedades de zonas: «Relleno» (interruptor, paleta de rellenos) y «Contorno»
+  (interruptor, color propio vía `Editor.picking_outline`, «Grosor», paleta de líneas,
+  «Ajustes del contorno», «Separar contorno» = `ProyectoDoc::split_outline`: copia después con
+  relleno apagado, también en el menú de la lista). `paleta::paleta` recibe los grupos.
 - Atajos (`shortcuts`, `clipboard_shortcuts`; no corren si un campo tiene el foco ni mientras
-  se escribe un texto en el lienzo): S/N/P/R/T/G herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
+  se escribe un texto en el lienzo): S/N/P/R/T/G/F herramientas, Ctrl+Z/Y, Ctrl+C/X/V (egui los entrega como `Event::Copy/Cut/Paste`; pega en el
   puntero), Ctrl+Shift+V (en el mismo lugar, vía `ViewportCommand::RequestPaste`), Ctrl+D,
   Ctrl+A, Esc, Supr (objetos, nodos o el fondo elegido), flechas.
 - Hay a lo sumo un documento abierto: `Editor.doc` (JEF) **o** `Editor.proyecto`. Abrir decide

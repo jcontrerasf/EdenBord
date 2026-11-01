@@ -24,6 +24,8 @@ pub struct Preferencias {
     pub realista: bool,
     /// Fuente de los textos nuevos (la última elegida).
     pub fuente: Option<bordado::fuentes::Fuente>,
+    /// Shape of the shapes tool (the last one chosen, with its parameters).
+    pub figura: Option<bordado::figuras::Shape>,
     /// Color de la tela (RGB).
     pub tela: [u8; 3],
 }
@@ -39,6 +41,7 @@ impl Default for Preferencias {
             contornos: false,
             realista: true,
             fuente: None,
+            figura: None,
             tela: [196, 190, 178],
         }
     }

@@ -105,24 +105,14 @@ impl Editor {
         let Some(doc) = &mut self.proyecto else {
             return;
         };
-        let obj = Objeto {
-            nombre: "texto".into(),
-            visible: true,
-            color: 1,
-            forma: Forma::Texto {
-                texto: String::new(),
-                fuente,
-                alto: 10.0,
-                espaciado: 0.0,
-                afin: Affine::translate(p.to_vec2()).as_coeffs(),
-            },
-            puntada: preset_por_nombre("Relleno horizontal"),
-            opacidad: bordado::OPACIDAD_GUIA,
-            bloqueado: false,
-            guides: None,
-            cuts: None,
-            order: None,
+        let forma = Forma::Texto {
+            texto: String::new(),
+            fuente,
+            alto: 10.0,
+            espaciado: 0.0,
+            afin: Affine::translate(p.to_vec2()).as_coeffs(),
         };
+        let obj = Objeto::new("texto", 1, forma, preset_por_nombre("Relleno horizontal"));
         let antes = doc.history_len();
         doc.add(vec![obj]);
         self.escritura = Some(Escritura {

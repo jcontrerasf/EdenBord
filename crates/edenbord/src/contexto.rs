@@ -18,6 +18,7 @@ impl Editor {
                 Tool::Ruler => self.ctx_ruler(ui),
                 Tool::Texto => self.ctx_text(ui),
                 Tool::Guides => self.ctx_guides(ui),
+                Tool::Shapes => self.ctx_shapes(ui),
             }
         });
     }
@@ -419,6 +420,23 @@ impl Editor {
             return;
         };
         let Some(i) = doc.editable() else {
+            // A text or a shape: its nodes are edited once it is a path.
+            if let [i] = doc.selection()[..]
+                && matches!(
+                    doc.proyecto.objetos[i].forma,
+                    bordado::Forma::Texto { .. } | bordado::Forma::Shape { .. }
+                )
+            {
+                if ui
+                    .button(format!("{} Convertir en trazado", iconos::NODOS))
+                    .on_hover_text("Para editar sus nodos; ya no se pueden cambiar sus medidas")
+                    .clicked()
+                {
+                    let _ = doc.convert_to_path(i);
+                }
+                ayuda(ui, "Los textos y las figuras se editan desde el panel.");
+                return;
+            }
             ayuda(ui, "Elige un contorno o una línea para editar sus nodos.");
             return;
         };
@@ -494,6 +512,48 @@ impl Editor {
         );
     }
 
+    /// Shapes tool: which shape and its parameters (for the next one drawn).
+    fn ctx_shapes(&mut self, ui: &mut Ui) {
+        for f in bordado::figuras::Shape::all() {
+            let activa = self.shape.same_kind(&f);
+            if tema::interruptor(ui, activa, icono_figura(&f), f.name()).clicked() && !activa {
+                self.shape = f;
+            }
+        }
+        ui.separator();
+        use bordado::figuras::{MAX_SIDES, MIN_SIDES, Shape};
+        match &mut self.shape {
+            Shape::Rectangle { radius, .. } => {
+                ui.label("Esquinas");
+                ui.add(
+                    egui::DragValue::new(radius)
+                        .range(0.0..=50.0)
+                        .speed(0.05)
+                        .suffix(" mm"),
+                )
+                .on_hover_text("Radio de las esquinas redondeadas (0 = rectas)");
+            }
+            Shape::Polygon { sides, .. } => {
+                ui.label("Lados");
+                ui.add(egui::Slider::new(sides, MIN_SIDES..=MAX_SIDES));
+            }
+            Shape::Star { points, inner, .. } => {
+                ui.label("Puntas");
+                ui.add(egui::Slider::new(points, MIN_SIDES..=MAX_SIDES));
+                ui.label("Interior");
+                ui.add(egui::Slider::new(inner, 0.1..=0.95).fixed_decimals(2))
+                    .on_hover_text("Qué tan adentro van las esquinas interiores");
+            }
+            _ => {}
+        }
+        ui.separator();
+        ayuda(
+            ui,
+            "Arrastrar: dibujar · clic: tamaño estándar · Shift: proporción natural · Ctrl: \
+             desde el centro · Esc: volver a Seleccionar",
+        );
+    }
+
     fn ctx_ruler(&mut self, ui: &mut Ui) {
         let Some((a, b)) = self.ruler else {
             ayuda(
@@ -535,6 +595,21 @@ fn campo(ui: &mut Ui, rotulo: &str, v: &mut f64, enabled: bool) -> bool {
             .suffix(" mm"),
     )
     .changed()
+}
+
+/// Icon of a kind of shape.
+pub(crate) fn icono_figura(f: &bordado::figuras::Shape) -> &'static str {
+    use bordado::figuras::Shape;
+    match f {
+        Shape::Rectangle { .. } => iconos::RECTANGULO,
+        Shape::Ellipse { .. } => iconos::ELIPSE,
+        Shape::Polygon { .. } => iconos::POLIGONO,
+        Shape::Star { .. } => iconos::ESTRELLA,
+        Shape::Heart { .. } => iconos::CORAZON,
+        Shape::Drop { .. } => iconos::GOTA,
+        Shape::Arrow { .. } => iconos::FLECHA,
+        Shape::Leaf { .. } => iconos::HOJA,
+    }
 }
 
 fn ayuda(ui: &mut Ui, texto: &str) {

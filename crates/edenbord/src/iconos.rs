@@ -40,6 +40,7 @@ pub const NODOS: &str = "\u{EB00}"; // bezier-curve
 pub const PLUMA: &str = "\u{E3AC}"; // pen-nib
 pub const REGLA: &str = "\u{E6B8}"; // ruler
 pub const GUIAS: &str = "\u{E6D2}"; // line-segment
+pub const FIGURAS: &str = "\u{EC5E}"; // shapes
 pub const CUADRICULA: &str = "\u{E296}"; // grid-four
 pub const AJUSTAR: &str = "\u{E1D0}"; // corners-out
 
@@ -75,6 +76,16 @@ pub const EXCLUIR: &str = "\u{E882}"; // exclude
 pub const CERRAR: &str = "\u{E6D0}"; // polygon
 pub const LISTO: &str = "\u{E182}"; // check
 pub const CANCELAR: &str = "\u{E4F6}"; // x
+
+// Figuras.
+pub const RECTANGULO: &str = "\u{E45E}"; // square
+pub const ELIPSE: &str = "\u{E18A}"; // circle
+pub const POLIGONO: &str = "\u{E2AE}"; // hexagon
+pub const ESTRELLA: &str = "\u{E46A}"; // star
+pub const CORAZON: &str = "\u{E2A8}"; // heart
+pub const GOTA: &str = "\u{E210}"; // drop
+pub const FLECHA: &str = "\u{E52C}"; // arrow-fat-right
+pub const HOJA: &str = "\u{E2DA}"; // leaf
 
 // Tipos de puntada.
 pub const GUIA: &str = "\u{E602}"; // circle-dashed

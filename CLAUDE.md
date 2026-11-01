@@ -378,7 +378,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 - `.github/workflows/ci.yml`: fmt, clippy, tests (Linux) y build en Windows.
   `release.yml`: con tag `vX.Y.Z` (debe coincidir con la versión de Cargo.toml) arma .deb,
   AppImage, instalador y zip y publica el Release; `workflow_dispatch` solo deja artefactos.
-- Sacar versión: subir `version` en `[workspace.package]`, commit, `git tag vX.Y.Z`,
+- Sacar versión: subir `version` en `[workspace.package]` y en las dependencias internas
+  (`jef`/`bordado` en los `Cargo.toml` de los crates), commit, `git tag vX.Y.Z`,
   `git push --tags`.
 
 ## Estado y próximos pasos

@@ -7,7 +7,7 @@ authors.workspace = true
 
 [dependencies]
 i_overlay = "9.0.0"
-jef = { version = "0.1.0", path = "../jef" }
+jef = { version = "0.2.0", path = "../jef" }
 kurbo = "0.13"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

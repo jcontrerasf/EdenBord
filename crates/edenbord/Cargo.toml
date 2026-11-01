@@ -8,8 +8,8 @@ authors.workspace = true
 
 [dependencies]
 eframe = { version = "0.37.0", features = ["persistence"] }
-bordado = { version = "0.1.0", path = "../bordado" }
-jef = { version = "0.1.0", path = "../jef" }
+bordado = { version = "0.2.0", path = "../bordado" }
+jef = { version = "0.2.0", path = "../jef" }
 kurbo = "0.13"
 serde = { version = "1.0.229", features = ["derive"] }
 rfd = "0.17.2"

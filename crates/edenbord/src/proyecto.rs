@@ -32,6 +32,8 @@ pub struct ProyectoDoc {
     pub guides: Vec<Vec<Guide>>,
     /// Cuts of each area satin (its own or the automatic ones); empty for the rest.
     pub cuts: Vec<Vec<Guide>>,
+    /// Columns of each area satin as (start, end), in sewing order; empty for the rest.
+    pub order: Vec<Vec<(Point, Point)>>,
     /// Versiones anteriores y siguientes, cada una con su selección.
     undo: Vec<(Proyecto, Vec<bool>)>,
     redo: Vec<(Proyecto, Vec<bool>)>,
@@ -62,6 +64,7 @@ impl ProyectoDoc {
             relleno_guias: vec![],
             guides: vec![],
             cuts: vec![],
+            order: vec![],
             undo: vec![],
             redo: vec![],
             last_key: None,
@@ -192,6 +195,13 @@ impl ProyectoDoc {
                 _ => (vec![], vec![]),
             })
             .unzip();
+        self.order = self
+            .proyecto
+            .objetos
+            .iter()
+            .zip(&self.generado.needles)
+            .map(|(o, &from)| o.area_order(from))
+            .collect();
         self.seleccion.resize(self.proyecto.objetos.len(), false);
     }
 
@@ -400,6 +410,7 @@ impl ProyectoDoc {
             }
             p.objetos[first].guides = guides;
             p.objetos[first].cuts = None;
+            p.objetos[first].order = None;
             if let Forma::Contorno { d } = &mut p.objetos[first].forma {
                 for el in extra {
                     d.push(el);
@@ -454,6 +465,7 @@ impl ProyectoDoc {
                         },
                         guides: None,
                         cuts: None,
+                        order: None,
                         ..original.clone()
                     })
                     .collect();
@@ -502,6 +514,7 @@ impl ProyectoDoc {
             // A new shape: its own guides would no longer fit.
             p.objetos[first].guides = None;
             p.objetos[first].cuts = None;
+            p.objetos[first].order = None;
             if op != Booleana::Restar {
                 let mut i = 0;
                 p.objetos.retain(|_| {
@@ -669,6 +682,15 @@ impl ProyectoDoc {
             Some(key) => self.edit_grouped(key, apply),
             None => self.edit(apply),
         }
+    }
+
+    /// Edits the sewing order of the columns of object `i`: `f` gets where each one starts, in
+    /// the current order (the automatic one, if it had none of its own).
+    pub fn edit_order(&mut self, i: usize, f: impl FnOnce(&mut Vec<Point>)) {
+        let mut starts: Vec<Point> = self.order[i].iter().map(|c| c.0).collect();
+        f(&mut starts);
+        let starts: Vec<[f64; 2]> = starts.iter().map(|p| [p.x, p.y]).collect();
+        self.edit(|p| p.objetos[i].order = Some(starts));
     }
 
     /// The guides or the cuts of object `i`.
@@ -873,6 +895,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         };
         let mut p = Proyecto::default();
         // Cuadrado con agujero y, encima, un cuadrado chico dentro del agujero.
@@ -963,6 +986,32 @@ mod tests {
             Some([p(20.0, 15.0), p(30.0, 15.0)])
         );
         assert_eq!(d.cut_across(0, p(-5.0, 40.0), p(5.0, 40.0)), None);
+    }
+
+    #[test]
+    fn reordering_columns() {
+        let mut d = doc();
+        d.edit(|p| {
+            p.objetos[0].forma = Forma::Contorno {
+                d: BezPath::from_svg("M0,0 L20,0 L20,3 L0,3 Z M0,10 L20,10 L20,13 L0,13 Z")
+                    .unwrap(),
+            };
+            p.objetos[0].puntada = bordado::preset_por_nombre("Satín de zona");
+        });
+        let auto = d.order[0].clone();
+        assert_eq!(auto.len(), 2);
+        assert!(d.order[1].is_empty(), "only area satins have an order");
+
+        // The second column first, starting from its other end.
+        d.edit_order(0, |starts| {
+            starts.swap(0, 1);
+            starts[0] = auto[1].1;
+        });
+        assert!(d.proyecto.objetos[0].order.is_some());
+        assert_eq!(d.order[0][0], (auto[1].1, auto[1].0));
+        assert_eq!(d.order[0][1], auto[0]);
+        d.undo();
+        assert_eq!(d.order[0], auto);
     }
 
     #[test]

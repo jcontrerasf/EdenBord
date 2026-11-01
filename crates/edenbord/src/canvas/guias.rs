@@ -2,6 +2,11 @@
 //! across the shape adds a guide (or a cut: see [`Editor::guide_kind`], Ctrl swaps them);
 //! dragging an end moves it along the edge; dragging the middle slides it; double click
 //! straightens a guide; right click deletes it.
+//!
+//! Each column shows where it starts (a filled circle with its number in the sewing order)
+//! and ends (an outlined one). Clicking an end makes the column start there; dragging a start
+//! onto another column sews it in that place; clicking a start picks the column, to move it
+//! from the context bar.
 
 use bordado::Puntada;
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Shape, Stroke, Vec2};
@@ -16,6 +21,10 @@ const END_PX: f32 = 12.0;
 const LINE_PX: f32 = 8.0;
 /// Size of the squares at the ends.
 const SQUARE_PX: f32 = 9.0;
+/// Radius of the circles of the sewing order, and how far (mm) into the column they go so the
+/// end of one column and the start of the next don't cover each other.
+const ORDER_PX: f32 = 8.0;
+const ORDER_INSET: f64 = 1.5;
 const KINDS: [LineKind; 2] = [LineKind::Cut, LineKind::Guide];
 
 /// What is under the pointer.
@@ -39,6 +48,37 @@ impl Editor {
         let obj = &doc.proyecto.objetos[i];
         let area = matches!(obj.puntada, Puntada::AreaSatin { .. });
         (area && !obj.bloqueado).then_some(i)
+    }
+
+    /// Where the circles of the sewing order go: start and end of each column, a little into
+    /// it.
+    fn order_marks(&self, obj: usize) -> Vec<(kurbo::Point, kurbo::Point)> {
+        let doc = self.proyecto.as_ref().unwrap();
+        doc.order[obj]
+            .iter()
+            .map(|&(s, e)| {
+                let inset = ORDER_INSET.min(s.distance(e) / 4.0);
+                let d = (e - s).normalize() * inset;
+                if d.is_finite() {
+                    (s + d, e - d)
+                } else {
+                    (s, e)
+                }
+            })
+            .collect()
+    }
+
+    /// The circle of the sewing order under the pointer: column and whether it's its end.
+    fn order_hit(&self, vista: Vista, pos: Pos2) -> Option<(usize, usize, bool)> {
+        let obj = self.guide_object()?;
+        self.order_marks(obj)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(k, (s, e))| [(k, false, s), (k, true, e)])
+            .map(|(k, end, p)| (k, end, vista.mm(p).distance(pos)))
+            .filter(|&(.., d)| d <= ORDER_PX + 2.0)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(k, end, _)| (obj, k, end))
     }
 
     /// The guide or cut under the pointer: ends first (closest), then lines.
@@ -89,6 +129,9 @@ impl Editor {
             (i.key_down(egui::Key::Space), m)
         });
         if space {
+            return;
+        }
+        if self.order_input(response, vista) {
             return;
         }
         if self.gesto.is_none()
@@ -225,6 +268,101 @@ impl Editor {
         }
     }
 
+    /// Clicks and drags on the circles of the sewing order. `true` if it took the input.
+    fn order_input(&mut self, response: &Response, vista: Vista) -> bool {
+        use egui::PointerButton::Primary;
+        if let Some(Gesto::Order { obj, column, to }) = &mut self.gesto {
+            if let Some(pos) = response.interact_pointer_pos() {
+                *to = vista.to_mm(pos);
+            }
+            let (obj, column, to) = (*obj, *column, *to);
+            if response.drag_stopped() {
+                self.gesto = None;
+                let target = self.order_hit(vista, vista.mm(to)).map(|h| h.1);
+                if let Some(j) = target.filter(|&j| j != column)
+                    && let Some(doc) = self.proyecto.as_mut()
+                {
+                    doc.edit_order(obj, |starts| {
+                        let s = starts.remove(column);
+                        starts.insert(j, s);
+                    });
+                    self.selected_column = Some((obj, j));
+                }
+            }
+            response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            return true;
+        }
+        let Some(pos) = response.hover_pos().or(response.interact_pointer_pos()) else {
+            return false;
+        };
+        let press = response
+            .ctx
+            .input(|i| i.pointer.press_origin())
+            .filter(|_| response.drag_started_by(Primary));
+        if let Some(o) = press
+            && let Some((obj, column, false)) = self.order_hit(vista, o)
+        {
+            self.selected_column = Some((obj, column));
+            self.gesto = Some(Gesto::Order {
+                obj,
+                column,
+                to: vista.to_mm(o),
+            });
+            return true;
+        }
+        let Some((obj, column, end)) = self.order_hit(vista, pos) else {
+            return false;
+        };
+        if self.gesto.is_none() {
+            response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked_by(Primary) {
+            self.selected_guide = None;
+            if end {
+                // Start from this end instead.
+                let doc = self.proyecto.as_mut().unwrap();
+                let e = doc.order[obj][column].1;
+                doc.edit_order(obj, |starts| starts[column] = e);
+            }
+            self.selected_column = Some((obj, column));
+        }
+        // Over a circle nothing else happens (no guide is drawn from it).
+        response.clicked() || response.drag_started() || response.secondary_clicked()
+    }
+
+    /// The circles of the sewing order: a filled one with the number where each column starts,
+    /// an outlined one where it ends; the picked column highlighted.
+    fn draw_order(&self, painter: &egui::Painter, obj: usize, vista: Vista) {
+        let picked = self.selected_column.filter(|c| c.0 == obj).map(|c| c.1);
+        let font = egui::FontId::proportional(11.0);
+        for (k, (s, e)) in self.order_marks(obj).into_iter().enumerate() {
+            let color = if picked == Some(k) {
+                tema::AVISO
+            } else {
+                tema::TEXTO
+            };
+            let (s, e) = (vista.mm(s), vista.mm(e));
+            painter.line_segment([s, e], Stroke::new(1.0, color.gamma_multiply(0.5)));
+            let number = (k + 1).to_string();
+            painter.circle(e, ORDER_PX, Color32::WHITE, Stroke::new(1.5, color));
+            painter.text(e, egui::Align2::CENTER_CENTER, &number, font.clone(), color);
+            painter.circle(s, ORDER_PX, color, Stroke::new(1.5, Color32::WHITE));
+            painter.text(
+                s,
+                egui::Align2::CENTER_CENTER,
+                &number,
+                font.clone(),
+                Color32::WHITE,
+            );
+        }
+        if let Some(Gesto::Order { obj: o, column, to }) = self.gesto
+            && o == obj
+            && let Some(&(s, _)) = self.order_marks(obj).get(column)
+        {
+            painter.line_segment([vista.mm(s), vista.mm(to)], Stroke::new(2.0, tema::AVISO));
+        }
+    }
+
     /// The guides and cuts of the area satin being edited, the one under the pointer
     /// highlighted, and the line being drawn. Guides have square ends, cuts round ones; both
     /// dashed while automatic.
@@ -287,6 +425,7 @@ impl Editor {
                 }
             }
         }
+        self.draw_order(painter, obj, vista);
         // The line being drawn, and where it will be cut to the edges.
         if let Some(Gesto::NewGuide { obj, kind, a, b }) = self.gesto {
             let color = match kind {

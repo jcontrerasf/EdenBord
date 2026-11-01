@@ -787,7 +787,7 @@ impl Editor {
                 }
             }
             // Ya se aplicó mientras se arrastraba.
-            Gesto::Angulo { .. } | Gesto::Guide { .. } => {}
+            Gesto::Angulo { .. } | Gesto::Guide { .. } | Gesto::Order { .. } => {}
             Gesto::NewGuide { obj, kind, a, b } => {
                 // A click without dragging doesn't draw a line.
                 if a.distance(b) > 0.2
@@ -1101,7 +1101,7 @@ impl Editor {
                 return;
             }
             Gesto::Angulo { angulo, .. } => format!("Filas a {angulo:.0}°"),
-            Gesto::Guide { .. } | Gesto::NewGuide { .. } => return,
+            Gesto::Guide { .. } | Gesto::NewGuide { .. } | Gesto::Order { .. } => return,
             Gesto::Transformar { tipo, r0, af, .. } => match tipo {
                 Tipo::Mover => {
                     let d = af.translation();

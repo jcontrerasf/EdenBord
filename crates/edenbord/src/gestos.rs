@@ -70,6 +70,13 @@ pub enum Gesto {
         a: Point,
         b: Point,
     },
+    /// Dragging the start of column `column` of area satin `obj` onto another one, to sew it
+    /// in that place; the pointer is at `to` (mm).
+    Order {
+        obj: usize,
+        column: usize,
+        to: Point,
+    },
 }
 
 /// What dragging an angle guide does.
@@ -124,6 +131,7 @@ impl Gesto {
             }
             // Needs the shape to snap to: the canvas does it.
             Gesto::Guide { .. } => {}
+            Gesto::Order { to, .. } => *to = hasta,
             Gesto::NewGuide { a, b, .. } => {
                 *b = if mods.shift {
                     snap_angle(*a, hasta, GIRO_PASO)

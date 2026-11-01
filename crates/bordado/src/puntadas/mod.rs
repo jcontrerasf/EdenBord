@@ -13,7 +13,7 @@ mod split;
 
 use kurbo::Point;
 
-pub use column::{AreaSatin, Guide, area_satin, auto_guides, columns};
+pub use column::{AreaSatin, Guide, Layout, area_satin, auto_guides, column_order, columns};
 pub use concentrico::concentrico;
 pub use corrido::corrido;
 pub use lineas::{feston, manual, punto_atras, tallo};

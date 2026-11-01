@@ -77,6 +77,37 @@ impl Objeto {
         }
     }
 
+    /// Where each column of an area satin starts and ends, in sewing order, with the needle
+    /// at `from` before it. Empty for other stitches.
+    pub fn area_order(&self, from: Point) -> Vec<(Point, Point)> {
+        let Puntada::AreaSatin { density, .. } = self.puntada else {
+            return vec![];
+        };
+        let (guides, cuts, order) = self.layout();
+        let layout = puntadas::Layout {
+            guides: guides.as_deref(),
+            cuts: &cuts,
+            order: order.as_deref(),
+        };
+        puntadas::column_order(&self.rings(), layout, density, from)
+    }
+
+    /// Guides of its own, cuts and order of an area satin, as points.
+    #[allow(clippy::type_complexity)]
+    fn layout(
+        &self,
+    ) -> (
+        Option<Vec<puntadas::Guide>>,
+        Vec<puntadas::Guide>,
+        Option<Vec<Point>>,
+    ) {
+        let order = self
+            .order
+            .as_ref()
+            .map(|o| o.iter().map(|p| Point::new(p[0], p[1])).collect());
+        (self.guides.as_deref().map(points), self.area_cuts(), order)
+    }
+
     /// The closed rings of the shape (mm); none if it can't be drawn.
     fn rings(&self) -> Vec<Vec<Point>> {
         let Ok(d) = self.trazado() else {
@@ -119,15 +150,14 @@ impl Objeto {
                 base,
                 compensation,
             } => {
-                let r = puntadas::area_satin(
-                    &anillos(),
-                    self.guides.as_deref().map(points).as_deref(),
-                    &self.area_cuts(),
-                    density,
-                    base,
-                    compensation,
-                    desde,
-                );
+                let (guides, cuts, order) = self.layout();
+                let layout = puntadas::Layout {
+                    guides: guides.as_deref(),
+                    cuts: &cuts,
+                    order: order.as_deref(),
+                };
+                let r =
+                    puntadas::area_satin(&anillos(), layout, density, base, compensation, desde);
                 if r.skipped > 0 {
                     warning = Some(format!(
                         "{} parte(s) no se pudieron bordar como columna (tienen más de un \
@@ -220,6 +250,8 @@ pub struct Generado {
     /// Para cada objeto (en orden), las entradas de `jef.stitches` que generó, incluido el
     /// salto o cambio de color con que empieza. Vacío si no se borda.
     pub rangos: Vec<Range<usize>>,
+    /// For each object, where the needle is (mm) before it is sewn.
+    pub needles: Vec<Point>,
     pub avisos: Vec<String>,
 }
 
@@ -231,12 +263,14 @@ impl Proyecto {
         let mut colors = Vec::new();
         let mut objeto_de_bloque = Vec::new();
         let mut rangos = Vec::with_capacity(self.objetos.len());
+        let mut needles = Vec::with_capacity(self.objetos.len());
         let mut avisos = Vec::new();
         let mut aguja = Point::ZERO;
         let mut pos = (0, 0);
         for (i, obj) in self.objetos.iter().enumerate() {
             let inicio = stitches.len();
             rangos.push(inicio..inicio);
+            needles.push(aguja);
             if !obj.visible {
                 continue;
             }
@@ -288,6 +322,7 @@ impl Proyecto {
             jef: Jef::new(Hoop::from_code(self.bastidor), colors, stitches),
             objeto_de_bloque,
             rangos,
+            needles,
             avisos,
         }
     }
@@ -327,6 +362,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         }
     }
 
@@ -415,6 +451,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         });
         let g = p.generar();
         assert_eq!(g.avisos.len(), 1);

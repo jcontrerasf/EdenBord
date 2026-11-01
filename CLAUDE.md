@@ -101,7 +101,9 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   satín de zona, segmentos `[[x,y],[x,y]]` en mm absolutos; `transformar` también las mueve.
   `cuts` (JSON `cortes`, `Option`: se omite si es `None` = automáticos; `[]` = sin cortes):
   cortes que parten el satín de zona en columnas, mismo formato que `guides`, también se
-  transforman. `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
+  transforman. `order` (JSON `orden`, `Option`, `None` = automático): orden de bordado de las
+  columnas del satín de zona como punto de inicio de cada una (mm), también se transforma.
+  `opacidad` solo sirve para ver las guías en el editor (se omite en el JSON si es
   `OPACIDAD_GUIA` = 0,15). `bloqueado` (solo se escribe si es `true`): no se elige en el lienzo.
 - `Forma` (`tipo`): `contorno {d}` (cerrada, agujeros por par-impar) | `linea {d}` |
   `texto {texto, fuente, alto (mayúsculas, mm), espaciado, afin [6]}`; `fuente` =
@@ -148,8 +150,14 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   `auto_cuts`: esquinas que giran > 40° hacia afuera de la zona (vértices del aplanado); se
   unen de a pares por dentro de la forma, de la más corta (barra de la H, bajo la de la T); las
   sueltas se cortan prolongando la más corta de sus dos aristas (brazos de la E, la L).
-  `Objeto::area_cuts()` = propios o automáticos. `area_satin` cose las columnas en orden voraz
-  desde la aguja, cada una desde su punta más cercana. Extremos de una columna sin guías: el
+  `Objeto::area_cuts()` = propios o automáticos. `area_satin(rings, Layout {guides, cuts,
+  order}, …, desde)`: orden con `sew_order`: primero las columnas cuya punta está a ≤ 5 mm de
+  cada punto de `order` (y desde esa punta), después voraz desde la aguja. `column_order` /
+  `Objeto::area_order(desde)` dan (inicio, fin) de cada columna en ese orden;
+  `Generado.needles[i]` = aguja antes del objeto `i`. Densidad: `pairs` mide la separación
+  entre puntadas en perpendicular a ellas (oblicuas al riel quedaban mucho más densas).
+  `auto_cuts` solo une dos esquinas si el segmento es ≤ 1,5 × el cruce del trazo desde cada
+  una (`PAIR_REACH`; si no, iría a lo largo de un trazo, como en la V de la M). Extremos de una columna sin guías: el
   par de puntas de menor ancho medio, salvo que dos tramos rectos donde el borde dobla (lados
   planos) den hasta 1,5 veces ese ancho (`FLAT_BIAS`: una punta siempre parece más angosta; sin
   esto un rectángulo corto se cosía desde una esquina, con guías de largo cero). Puntas cortadas (`cut`): tramos rectos del borde (`stretches`) cerca
@@ -259,7 +267,12 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   (extremos cuadrados, copihue) y cortes (redondos, hoja), sin marco (punteados si son
   automáticos). Guías y cortes se editan igual (`proyecto::LineKind`, `lines`, `edit_lines`,
   `remove_line`); lo que se dibuja lo elige `Editor.guide_kind` en la barra contextual (Ctrl:
-  lo otro), que además tiene «Automáticas», «Sin guías» (`Some([])`, para ponerlas a mano),
+  lo otro). Orden: círculo lleno con el número donde empieza cada columna y hueco donde
+  termina (`order_marks`, metidos 1,5 mm); clic en el hueco = empezar ahí, arrastrar el lleno
+  sobre otra columna (`Gesto::Order`) = bordarla en ese lugar, clic en el lleno = elegirla
+  (`Editor.selected_column`) para Primera/Antes/Después/Última/Invertir en la barra
+  contextual; `ProyectoDoc::edit_order` copia antes el orden automático. La barra contextual
+  además tiene «Orden automático», «Automáticas», «Sin guías» (`Some([])`, para ponerlas a mano),
   «Cortes automáticos» y «Sin cortes». Arrastrar a través de la forma = guía nueva
   (`Gesto::NewGuide`, Shift de a 15°; al soltar `cut_across` corta la recta en los bordes: el
   tramo de adentro que contiene el medio del trazo, o el más cercano). Arrastrar un extremo

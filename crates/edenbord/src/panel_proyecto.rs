@@ -197,6 +197,7 @@ impl Editor {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         }]);
         self.pen = Default::default();
     }

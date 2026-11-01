@@ -125,6 +125,7 @@ fn objeto(p: &usvg::Path, n: usize) -> Option<Objeto> {
         bloqueado: false,
         guides: None,
         cuts: None,
+        order: None,
     })
 }
 

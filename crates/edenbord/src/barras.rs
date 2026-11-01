@@ -193,6 +193,7 @@ impl Editor {
         }
         if tool != Tool::Guides {
             self.selected_guide = None;
+            self.selected_column = None;
         }
         self.tool = tool;
     }

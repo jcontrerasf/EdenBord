@@ -121,6 +121,7 @@ impl Editor {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         };
         let antes = doc.history_len();
         doc.add(vec![obj]);

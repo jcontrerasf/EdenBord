@@ -76,6 +76,10 @@ pub struct Objeto {
     /// automatic (where the strokes meet); empty = no cuts.
     #[serde(rename = "cortes", default, skip_serializing_if = "Option::is_none")]
     pub cuts: Option<Vec<[[f64; 2]; 2]>>,
+    /// Sewing order of the columns of an area satin: where each one starts, in mm. `None` =
+    /// automatic (the closest to the needle first).
+    #[serde(rename = "orden", default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<Vec<[f64; 2]>>,
 }
 
 /// Opacidad con que se ven las guías si no se elige otra: muy traslúcidas.
@@ -737,13 +741,8 @@ impl Objeto {
             Forma::Contorno { d } | Forma::Linea { d } => d.apply_affine(t),
             Forma::Texto { afin, .. } => *afin = (t * Affine::new(*afin)).as_coeffs(),
         }
-        for p in self
-            .guides
-            .iter_mut()
-            .chain(&mut self.cuts)
-            .flatten()
-            .flatten()
-        {
+        let segments = self.guides.iter_mut().chain(&mut self.cuts).flatten();
+        for p in segments.flatten().chain(self.order.iter_mut().flatten()) {
             let q = t * kurbo::Point::new(p[0], p[1]);
             *p = [q.x, q.y];
         }
@@ -893,6 +892,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         });
         p.objetos.push(Objeto {
             nombre: "texto".into(),
@@ -910,6 +910,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         });
         let text = p.guardar();
         assert!(!text.contains("fondo"), "sin fondo no se escribe el campo");
@@ -961,6 +962,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert_eq!(pegar_objetos(&text), Some(vec![o]));
@@ -1097,6 +1099,7 @@ mod tests {
             bloqueado: false,
             guides: None,
             cuts: None,
+            order: None,
         };
         let text = copiar_objetos(std::slice::from_ref(&o));
         assert!(!text.contains("guias"), "automatic guides aren't written");
@@ -1118,7 +1121,11 @@ mod tests {
         assert!(text.contains(r#""cortes":[]"#), "{text}");
         assert_eq!(pegar_objetos(&text), Some(vec![o.clone()]));
         o.cuts = Some(vec![[[3.0, 0.0], [3.0, 2.0]]]);
+        o.order = Some(vec![[0.0, 1.0]]);
+        let text = copiar_objetos(std::slice::from_ref(&o));
+        assert!(text.contains(r#""orden":[[0.0,1.0]]"#), "{text}");
         o.transformar(Affine::translate((1.0, 3.0)));
+        assert_eq!(o.order, Some(vec![[1.0, 4.0]]));
         assert_eq!(o.guides, Some(vec![[[6.0, 3.0], [6.0, 5.0]]]));
         assert_eq!(o.cuts, Some(vec![[[4.0, 3.0], [4.0, 5.0]]]));
     }

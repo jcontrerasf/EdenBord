@@ -47,6 +47,7 @@ fn objeto(nombre: &str, color: i32, forma: Forma, puntada: Puntada) -> Objeto {
         bloqueado: false,
         guides: None,
         cuts: None,
+        order: None,
     }
 }
 

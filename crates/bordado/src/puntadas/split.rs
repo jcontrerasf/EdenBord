@@ -16,6 +16,9 @@ use super::column::{Guide, Ring, area, components, inside_ring, owner};
 const SNAP: f64 = 1.0;
 /// A vertex turning more than this away from the area is a corner where two strokes meet.
 const CORNER_DEG: f64 = 40.0;
+/// Two corners are joined by a cut if it is at most this many times the way across the stroke
+/// from either of them; if not, the segment runs along a stroke instead of across it.
+const PAIR_REACH: f64 = 1.5;
 /// How far (mm) a cut must stay from the edges, except at its ends.
 const CLEARANCE: f64 = 0.02;
 const EPS: f64 = 1e-6;
@@ -38,12 +41,29 @@ pub fn auto_cuts(rings: &[Vec<Point>]) -> Vec<Guide> {
     for part in oriented(components(rings)) {
         let sign = area(&part[0].pts).signum();
         let corners: Vec<Corner> = part.iter().flat_map(|r| corners(r, sign)).collect();
+        // The shortest way across the stroke from each corner, along one of its edges.
+        let across: Vec<Option<(f64, Guide)>> = corners
+            .iter()
+            .map(|c| {
+                [c.inn, -c.out]
+                    .into_iter()
+                    .filter_map(|d| {
+                        let t = ray(&part, c.p, d)?;
+                        let cut = [c.p, c.p + d * t];
+                        inside(&part, cut[0], cut[1]).then_some((t, cut))
+                    })
+                    .min_by(|x, y| x.0.total_cmp(&y.0))
+            })
+            .collect();
+        // Two corners face each other if joining them isn't much longer than going across.
+        let reach = |i: usize| across[i].map_or(f64::MAX, |(t, _)| t * PAIR_REACH);
         let mut pairs: Vec<(f64, usize, usize)> = vec![];
         for i in 0..corners.len() {
             for j in i + 1..corners.len() {
                 let (a, b) = (corners[i].p, corners[j].p);
-                if inside(&part, a, b) {
-                    pairs.push((a.distance(b), i, j));
+                let l = a.distance(b);
+                if l <= reach(i).min(reach(j)) && inside(&part, a, b) {
+                    pairs.push((l, i, j));
                 }
             }
         }
@@ -58,17 +78,10 @@ pub fn auto_cuts(rings: &[Vec<Point>]) -> Vec<Guide> {
                 out.push(cut);
             }
         }
-        for (c, _) in corners.iter().zip(&used).filter(|(_, u)| !**u) {
-            let shortest = [c.inn, -c.out]
-                .into_iter()
-                .filter_map(|d| {
-                    let t = ray(&part, c.p, d)?;
-                    let cut = [c.p, c.p + d * t];
-                    (inside(&part, cut[0], cut[1]) && !out[first..].iter().any(|o| meet(o, &cut)))
-                        .then_some((t, cut))
-                })
-                .min_by(|x, y| x.0.total_cmp(&y.0));
-            if let Some((_, cut)) = shortest {
+        for (k, _) in used.iter().enumerate().filter(|(_, u)| !**u) {
+            if let Some((_, cut)) = across[k]
+                && !out[first..].iter().any(|o| meet(o, &cut))
+            {
                 out.push(cut);
             }
         }
@@ -300,6 +313,27 @@ mod tests {
         assert_eq!(e.len(), 3, "{e:?}");
         assert!(e.iter().any(|c| is(c, p(3.0, 8.5), p(3.0, 11.5))), "{e:?}");
         assert_eq!(split(&rings(E), &e).len(), 4);
+    }
+
+    #[test]
+    fn the_v_of_an_m_is_cut_at_its_point() {
+        let m = "M0,0 L4,0 L10,14 L16,0 L20,0 L20,20 L17,20 L17,6 L11.5,20 L8.5,20 L3,6 L3,20 \
+                 L0,20 Z";
+        let cuts = auto_cuts(&rings(m));
+        assert!(
+            cuts.iter().any(|c| is(c, p(3.0, 6.0), p(3.0, 0.0))),
+            "{cuts:?}"
+        );
+        assert!(
+            cuts.iter().any(|c| is(c, p(17.0, 6.0), p(17.0, 0.0))),
+            "{cuts:?}"
+        );
+        // The point of the V, cut across one of its diagonals.
+        assert!(
+            cuts.iter()
+                .any(|c| c[0] == p(10.0, 14.0) || c[1] == p(10.0, 14.0))
+        );
+        assert_eq!(split(&rings(m), &cuts).len(), 4, "{cuts:?}");
     }
 
     #[test]

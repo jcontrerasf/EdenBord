@@ -114,6 +114,60 @@ impl Editor {
             doc.edit(|p| p.objetos[i].cuts = Some(vec![]));
             self.selected_guide = None;
         }
+        ui.separator();
+        self.ctx_order(ui, i);
+    }
+
+    /// Sewing order of the columns of area satin `i`: moving the picked column, and going back
+    /// to the automatic order.
+    fn ctx_order(&mut self, ui: &mut Ui, i: usize) {
+        let Some(doc) = &mut self.proyecto else {
+            return;
+        };
+        let suave = |t: &str| RichText::new(t).color(tema::TEXTO_SUAVE);
+        let n = doc.order[i].len();
+        if let Some((_, k)) = self.selected_column.filter(|c| c.0 == i && c.1 < n) {
+            ui.label(suave(&format!("Columna {}:", k + 1)));
+            let moves = [
+                ("Primera", 0),
+                ("Antes", k.saturating_sub(1)),
+                ("Después", (k + 1).min(n - 1)),
+                ("Última", n - 1),
+            ];
+            for (label, j) in moves {
+                if ui.add_enabled(j != k, egui::Button::new(label)).clicked() {
+                    doc.edit_order(i, |starts| {
+                        let s = starts.remove(k);
+                        starts.insert(j, s);
+                    });
+                    self.selected_column = Some((i, j));
+                }
+            }
+            if ui
+                .button("Invertir")
+                .on_hover_text("Que empiece por el otro extremo")
+                .clicked()
+            {
+                let e = doc.order[i][k].1;
+                doc.edit_order(i, |starts| starts[k] = e);
+            }
+        } else {
+            ui.label(suave(&format!("{n} columnas"))).on_hover_text(
+                "Los círculos muestran el orden de bordado: lleno donde empieza cada columna, \
+                     hueco donde termina. Clic en un hueco: empezar por ahí. Arrastrar un círculo \
+                     lleno sobre otra columna: bordarla en ese lugar. Clic en uno lleno: elegir \
+                     la columna para moverla",
+            );
+        }
+        if doc.proyecto.objetos[i].order.is_some()
+            && ui
+                .button("Orden automático")
+                .on_hover_text("Borda primero la columna más cercana a la aguja, y así")
+                .clicked()
+        {
+            doc.edit(|p| p.objetos[i].order = None);
+            self.selected_column = None;
+        }
     }
 
     fn ctx_text(&mut self, ui: &mut Ui) {

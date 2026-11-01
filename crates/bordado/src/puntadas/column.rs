@@ -49,6 +49,10 @@ const SIMPLIFY_TOL: f64 = 0.4;
 /// some to grab along the column.
 const MAX_GAP: f64 = 10.0;
 const EPS: f64 = 1e-6;
+/// How far (mm) a start saved in the order may be from the column's end and still be it.
+const ORDER_SNAP: f64 = 5.0;
+/// Least share of a rail counted when spacing slanted stitches (see [`pairs`]).
+const MIN_SIN: f64 = 0.25;
 
 /// Stitches of an area satin.
 pub struct AreaSatin {
@@ -57,38 +61,39 @@ pub struct AreaSatin {
     pub skipped: usize,
 }
 
-/// Satin column filling each part of the area (even-odd rings, split by `cuts`), turning with
-/// the guides: `None` = automatic; with guides of its own, a part with fewer than two gets the
-/// automatic ends. The columns are sewn starting with
-/// the one closest to the needle (at `from`), each from its closest end.
+/// How an area satin is laid out besides its shape.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Layout<'a> {
+    /// Angle guides: `None` = automatic; with guides of its own, a part with fewer than two gets
+    /// the automatic ends.
+    pub guides: Option<&'a [Guide]>,
+    /// Cuts that split the shape in columns.
+    pub cuts: &'a [Guide],
+    /// Where each column starts, in sewing order. Columns not listed (or all, with `None`) come
+    /// after: the one closest to the needle first.
+    pub order: Option<&'a [Point]>,
+}
+
+/// Satin column filling each part of the area (even-odd rings), laid out by `layout`. The
+/// needle starts at `from`.
 pub fn area_satin(
     rings: &[Vec<Point>],
-    guides: Option<&[Guide]>,
-    cuts: &[Guide],
+    layout: Layout,
     density: f64,
     base: BaseSatin,
     compensation: f64,
     from: Point,
 ) -> AreaSatin {
-    let all = columns(rings, guides, cuts, density);
+    let all = columns(rings, layout.guides, layout.cuts, density);
     let skipped = all.iter().filter(|c| c.is_none()).count();
-    let mut left: Vec<Vec<(Point, Point)>> =
+    let cols: Vec<Vec<(Point, Point)>> =
         all.into_iter().flatten().filter(|c| c.len() > 1).collect();
     let mut out = AreaSatin {
         runs: vec![],
         skipped,
     };
-    let mut at = from;
-    while !left.is_empty() {
-        let mid = |(a, b): (Point, Point)| a.midpoint(b).distance(at);
-        let (k, reverse) = left
-            .iter()
-            .enumerate()
-            .flat_map(|(k, c)| [(k, false, mid(c[0])), (k, true, mid(c[c.len() - 1]))])
-            .min_by(|x, y| x.2.total_cmp(&y.2))
-            .map(|(k, r, _)| (k, r))
-            .unwrap();
-        let mut pairs = left.swap_remove(k);
+    for (k, reverse) in sew_order(&cols, layout.order, from) {
+        let mut pairs = cols[k].clone();
         if reverse {
             pairs.reverse();
         }
@@ -99,9 +104,75 @@ pub fn area_satin(
                 (a + d, b - d)
             })
             .collect();
-        let run = split_long(&sew(&pairs, density, base), MAX_STITCH);
-        at = run.last().copied().unwrap_or(at);
-        out.runs.push(run);
+        out.runs
+            .push(split_long(&sew(&pairs, density, base), MAX_STITCH));
+    }
+    out
+}
+
+/// Where each column starts and ends (the middle of its first and last stitch), in sewing
+/// order, as [`area_satin`] sews them.
+pub fn column_order(
+    rings: &[Vec<Point>],
+    layout: Layout,
+    density: f64,
+    from: Point,
+) -> Vec<(Point, Point)> {
+    let cols: Vec<Vec<(Point, Point)>> = columns(rings, layout.guides, layout.cuts, density)
+        .into_iter()
+        .flatten()
+        .filter(|c| c.len() > 1)
+        .collect();
+    sew_order(&cols, layout.order, from)
+        .into_iter()
+        .map(|(k, reverse)| {
+            let (s, e) = column_ends(&cols[k]);
+            if reverse { (e, s) } else { (s, e) }
+        })
+        .collect()
+}
+
+fn column_ends(c: &[(Point, Point)]) -> (Point, Point) {
+    let mid = |(a, b): (Point, Point)| a.midpoint(b);
+    (mid(c[0]), mid(c[c.len() - 1]))
+}
+
+/// The order to sew the columns in, and whether each one goes backwards: first the ones whose
+/// start is in `order` (the end closest to each point, if near), then the closest to the
+/// needle each time.
+fn sew_order(
+    cols: &[Vec<(Point, Point)>],
+    order: Option<&[Point]>,
+    from: Point,
+) -> Vec<(usize, bool)> {
+    let ends: Vec<(Point, Point)> = cols.iter().map(|c| column_ends(c)).collect();
+    let mut used = vec![false; cols.len()];
+    let mut out = vec![];
+    let mut at = from;
+    // The free column with an end closest to `p`, and whether that end is its last one.
+    let closest = |used: &[bool], p: Point| {
+        (0..ends.len())
+            .filter(|&k| !used[k])
+            .flat_map(|k| {
+                [
+                    (k, false, p.distance(ends[k].0)),
+                    (k, true, p.distance(ends[k].1)),
+                ]
+            })
+            .min_by(|x, y| x.2.total_cmp(&y.2))
+    };
+    let wanted = order.unwrap_or_default().iter();
+    let rest = std::iter::repeat_n(None, cols.len());
+    for p in wanted.map(Some).chain(rest) {
+        let pick = match p {
+            Some(&p) => closest(&used, p).filter(|c| c.2 <= ORDER_SNAP),
+            None => closest(&used, at),
+        };
+        if let Some((k, reverse, _)) = pick {
+            used[k] = true;
+            out.push((k, reverse));
+            at = if reverse { ends[k].0 } else { ends[k].1 };
+        }
     }
     out
 }
@@ -418,13 +489,22 @@ fn monotonic(mut middle: Vec<(f64, f64)>, last: (f64, f64)) -> Vec<(f64, f64)> {
     out
 }
 
-/// Edge pairs between consecutive rungs, interpolated by arc length; `step` is the spacing on
-/// the longer rail.
+/// Edge pairs between consecutive rungs, interpolated by arc length; `step` is the spacing
+/// between stitches on the rail where they are farther apart. Measured across the stitches: if
+/// they go slanted over the rail, they are closer than the distance along it.
 fn pairs(c: &Column, step: f64) -> Vec<(Point, Point)> {
     let mut out = Vec::new();
     for w in c.rungs.windows(2) {
         let ((a0, b0), (a1, b1)) = (w[0], w[1]);
-        let n = ((a1 - a0).max(b1 - b0) / step).ceil().max(1.0) as usize;
+        let (pa0, pb0) = (c.a.en(a0).0, c.b.en(b0).0);
+        let (pa1, pb1) = (c.a.en(a1).0, c.b.en(b1).0);
+        let across = unitario(unitario(pb0 - pa0) + unitario(pb1 - pa1));
+        // Share of the rail's length that goes across the stitches (not too little, so stitches
+        // running along the edge don't end up far apart).
+        let sin = |p: Point, q: Point| unitario(q - p).cross(across).abs().max(MIN_SIN);
+        let n = (((a1 - a0) * sin(pa0, pa1)).max((b1 - b0) * sin(pb0, pb1)) / step)
+            .ceil()
+            .max(1.0) as usize;
         for k in 0..n {
             let u = k as f64 / n as f64;
             out.push((c.a.en(a0 + (a1 - a0) * u).0, c.b.en(b0 + (b1 - b0) * u).0));
@@ -927,6 +1007,65 @@ mod tests {
     }
 
     #[test]
+    fn slanted_stitches_keep_the_density() {
+        // A diagonal stroke sewn with horizontal stitches (flat ends): consecutive stitches
+        // are `density / 2` apart measured between them, not along the edge.
+        let d = "M0,0 L4,0 L24,10 L20,10 Z";
+        let guides = [
+            [Point::new(0.0, 0.0), Point::new(4.0, 0.0)],
+            [Point::new(20.0, 10.0), Point::new(24.0, 10.0)],
+        ];
+        let pairs = column_pairs(d, &guides);
+        let gaps: Vec<f64> = pairs.windows(2).map(|w| w[1].0.y - w[0].0.y).collect();
+        let mean = gaps.iter().sum::<f64>() / gaps.len() as f64;
+        assert!((mean - 0.2).abs() < 0.01, "{mean}");
+    }
+
+    #[test]
+    fn a_diagonal_is_crossed_square() {
+        // A long diagonal stroke cut flat at both ends: in the middle the stitches go across
+        // the stroke, not parallel to the ends.
+        let d = "M0,0 L4,0 L24,40 L20,40 Z";
+        let pairs = column_pairs(d, &[]);
+        let along = Point::new(20.0, 40.0) - Point::ORIGIN;
+        let mid = &pairs[pairs.len() / 3..2 * pairs.len() / 3];
+        for &(a, b) in mid {
+            let cos = (b - a).normalize().dot(along.normalize()).abs();
+            assert!(cos < 0.26, "{a:?} {b:?}: {:.0}°", cos.acos().to_degrees());
+        }
+    }
+
+    #[test]
+    fn the_order_picks_columns_and_their_start() {
+        // Three bars: sewn as the order says, from the end given, and the one left out last.
+        let d = "M0,0 L20,0 L20,3 L0,3 Z M0,10 L20,10 L20,13 L0,13 Z M0,20 L20,20 L20,23 L0,23 Z";
+        let order = [Point::new(20.0, 11.5), Point::new(0.5, 1.0)];
+        let layout = Layout {
+            order: Some(&order),
+            ..Layout::default()
+        };
+        let ends = column_order(&rings(d), layout, 0.4, Point::ZERO);
+        assert_eq!(ends.len(), 3);
+        let near = |p: Point, x: f64, y: f64| p.distance(Point::new(x, y)) < 0.3;
+        assert!(
+            near(ends[0].0, 20.0, 11.5) && near(ends[0].1, 0.0, 11.5),
+            "{ends:?}"
+        );
+        assert!(near(ends[1].0, 0.0, 1.5), "{ends:?}");
+        assert!(
+            near(ends[2].0, 20.0, 21.5) || near(ends[2].0, 0.0, 21.5),
+            "{ends:?}"
+        );
+        // The runs follow the same order.
+        let r = area_satin(&rings(d), layout, 0.4, BaseSatin::Ninguna, 0.0, Point::ZERO);
+        assert!(
+            r.runs[0][0].y > 9.0 && r.runs[0][0].x > 19.0,
+            "{:?}",
+            r.runs[0][0]
+        );
+    }
+
+    #[test]
     fn hand_guides_change_the_angle() {
         let d = "M0,0 L20,0 L20,4 L0,4 Z";
         // Ends straight; a slanted guide in the middle.
@@ -960,8 +1099,7 @@ mod tests {
                  M30,0 L50,0 L50,3 L30,3 Z";
         let r = area_satin(
             &rings(d),
-            None,
-            &[],
+            Layout::default(),
             0.4,
             BaseSatin::Central,
             0.0,
@@ -976,8 +1114,7 @@ mod tests {
         let d = "M0,0 L20,0 L20,16 L0,16 Z";
         let r = area_satin(
             &rings(d),
-            None,
-            &[],
+            Layout::default(),
             0.4,
             BaseSatin::Ninguna,
             0.0,

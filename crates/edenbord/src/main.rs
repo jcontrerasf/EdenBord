@@ -165,6 +165,9 @@ struct Editor {
     fondo_sel: bool,
     /// Angle guide or cut picked on the canvas (object, kind, index): Supr deletes it.
     selected_guide: Option<(usize, proyecto::LineKind, usize)>,
+    /// Column of an area satin picked with the Guides tool (object, place in the sewing order),
+    /// to move it in the order from the context bar.
+    selected_column: Option<(usize, usize)>,
     /// What dragging across an area satin draws with the Guides tool (Ctrl: the other one).
     guide_kind: proyecto::LineKind,
     /// Herramienta de nodos: objeto en edición, nodos elegidos y arrastre en curso.
@@ -227,6 +230,7 @@ impl Default for Editor {
             fondo_sel: false,
             selected_guide: None,
             guide_kind: proyecto::LineKind::Guide,
+            selected_column: None,
             nodos_obj: None,
             nodos_sel: vec![],
             gesto_nodo: None,
@@ -398,6 +402,7 @@ impl Editor {
         self.escritura = None;
         self.fondo_sel = false;
         self.selected_guide = None;
+        self.selected_column = None;
         self.nodos_obj = None;
         self.nodos_sel.clear();
         self.gesto_nodo = None;
@@ -675,8 +680,9 @@ impl Editor {
         }
         if escape && !self.nodos_sel.is_empty() {
             self.nodos_sel.clear();
-        } else if escape && self.selected_guide.is_some() {
+        } else if escape && (self.selected_guide.is_some() || self.selected_column.is_some()) {
             self.selected_guide = None;
+            self.selected_column = None;
         } else if escape && self.tool == Tool::Guides {
             self.tool = Tool::Select;
         } else if escape {

@@ -58,6 +58,7 @@ fn objeto(grupo: Grupo, puntada: Puntada) -> Objeto {
         bloqueado: false,
         guides: None,
         cuts: None,
+        order: None,
     }
 }
 

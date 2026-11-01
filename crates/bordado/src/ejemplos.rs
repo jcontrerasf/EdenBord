@@ -30,6 +30,12 @@ pub const EJEMPLOS: &[Ejemplo] = &[
         descripcion: "Rectángulo con contorno de festón, onda decorativa y un texto con relleno y contorno",
         crear: marco,
     },
+    Ejemplo {
+        nombre: "Calibrar rellenos",
+        descripcion: "Matriz de cuadrados de relleno: la separación entre filas cambia de una \
+                      columna a otra y el largo de puntada de una fila a otra",
+        crear: calibration,
+    },
 ];
 
 /// Color de la paleta Janome más parecido.
@@ -306,6 +312,85 @@ fn marco() -> Proyecto {
     }
 }
 
+/// Row spacings (columns of the matrix) and stitch lengths (rows) of the calibration sheet.
+const CALIBRATION_SPACING: [f64; 5] = [0.3, 0.4, 0.5, 0.6, 0.7];
+const CALIBRATION_LENGTH: [f64; 4] = [2.0, 3.0, 4.0, 5.0];
+
+/// Number for a label, with a decimal comma: 0.4 → "0,4", 3.0 → "3".
+fn decimal(v: f64) -> String {
+    format!("{v}").replace('.', ",")
+}
+
+/// Fill calibration sheet: a matrix of tatami squares, one thread, with the row spacing
+/// growing to the right and the stitch length growing down. The values are guides.
+fn calibration() -> Proyecto {
+    const SIDE: f64 = 15.0;
+    const STEP: f64 = 19.0;
+    let hilo = color([40, 70, 140]);
+    let gris = color([60, 50, 40]);
+    let (cols, rows) = (CALIBRATION_SPACING.len(), CALIBRATION_LENGTH.len());
+    // Squares centered on the hoop; labels above and to the left.
+    let center = |c: usize, r: usize| {
+        Point::new(
+            (c as f64 - (cols - 1) as f64 / 2.0) * STEP,
+            (r as f64 - (rows - 1) as f64 / 2.0) * STEP + 4.0,
+        )
+    };
+    let mut objetos = Vec::new();
+    for (r, &largo) in CALIBRATION_LENGTH.iter().enumerate() {
+        for (c, &separacion) in CALIBRATION_SPACING.iter().enumerate() {
+            let mut puntada = preset_por_nombre("Relleno 45°");
+            if let Puntada::Relleno {
+                separacion: s,
+                largo: l,
+                base,
+                ..
+            } = &mut puntada
+            {
+                (*s, *l, *base) = (separacion, largo, false);
+            }
+            let nombre = format!(
+                "separación {} · largo {}",
+                decimal(separacion),
+                decimal(largo)
+            );
+            let forma = Forma::Shape {
+                shape: Shape::Rectangle {
+                    width: SIDE,
+                    height: SIDE,
+                    radius: 0.0,
+                },
+                afin: Affine::translate(center(c, r).to_vec2()).as_coeffs(),
+            };
+            objetos.push(objeto(&nombre, hilo, forma, puntada));
+        }
+    }
+    if let Some(f) = fuentes::predeterminada() {
+        let mut label = |t: &str, alto: f64, p: Point| {
+            if let Some(mut o) = texto_centrado(t, &f, alto, p, gris, Puntada::Ninguna) {
+                o.opacidad = 0.6;
+                o.bloqueado = true;
+                objetos.push(o);
+            }
+        };
+        let top = center(0, 0).y - SIDE / 2.0;
+        let left = center(0, 0).x - SIDE / 2.0;
+        label("Separación (mm) →", 3.0, Point::new(0.0, top - 9.0));
+        for (c, &v) in CALIBRATION_SPACING.iter().enumerate() {
+            label(&decimal(v), 2.5, Point::new(center(c, 0).x, top - 3.5));
+        }
+        label("Largo", 2.5, Point::new(left - 5.5, top - 3.5));
+        for (r, &v) in CALIBRATION_LENGTH.iter().enumerate() {
+            label(&decimal(v), 2.5, Point::new(left - 5.5, center(0, r).y));
+        }
+    }
+    Proyecto {
+        bastidor: jef::Hoop::A110x110.code(),
+        objetos,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +416,32 @@ mod tests {
             let json = p.guardar();
             assert_eq!(Proyecto::leer(&json).unwrap().guardar(), json);
         }
+    }
+
+    #[test]
+    fn calibration_sheet_has_every_combination_in_one_thread() {
+        let p = calibration();
+        let squares: Vec<_> = p
+            .objetos
+            .iter()
+            .filter_map(|o| match o.puntada {
+                Puntada::Relleno {
+                    separacion, largo, ..
+                } => Some((separacion, largo)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            squares.len(),
+            CALIBRATION_SPACING.len() * CALIBRATION_LENGTH.len()
+        );
+        for s in CALIBRATION_SPACING {
+            for l in CALIBRATION_LENGTH {
+                assert!(squares.contains(&(s, l)), "{s} {l}");
+            }
+        }
+        assert_eq!(p.generar().jef.colors.len(), 1);
+        assert_eq!(decimal(0.4), "0,4");
+        assert_eq!(decimal(3.0), "3");
     }
 }

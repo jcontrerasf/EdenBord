@@ -192,7 +192,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
   lee la de fontconfig), `datos` (bytes + índice de cara, caché de 12). La app las carga en un
   hilo al iniciar.
 - `ejemplos.rs`: `EJEMPLOS` = proyectos de muestra armados en código (muestrario con todos los
-  `PRESETS` y sus nombres como guías bloqueadas, flor, marco con texto); el test verifica que
+  `PRESETS` y sus nombres como guías bloqueadas, flor, marco con texto, «Calibrar rellenos»:
+  matriz separación × largo con los valores como guías); el test verifica que
   generan sin avisos, caben en su bastidor y se releen igual.
 - `.ai`: aún no; exportar a SVG desde Illustrator.
 

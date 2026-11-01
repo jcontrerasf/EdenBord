@@ -199,6 +199,8 @@ ellos pide guardarlo como `.edenbord`. Usar `bordado::EXTENSION`, no el texto li
 
 ## App (`crates/edenbord/src`)
 
+- Windows: wgpu usa DX12 + GL, no Vulkan (`wgpu_options`): algunos drivers/capas Vulkan cerraban la
+  app al crear la ventana (0xC0000005, intermitente). `WGPU_BACKEND` lo cambia.
 - `main.rs`: estado `Editor`, distribución (`App::ui`), panel derecho de JEF (`side_panel`),
   atajos, diálogos (paleta, confirmaciones), guardado.
 - Distribución (`barras.rs`): barra superior (logo, nombre, abrir/nuevo/guardar, deshacer,

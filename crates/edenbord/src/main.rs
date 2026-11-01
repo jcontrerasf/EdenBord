@@ -52,6 +52,7 @@ fn main() -> eframe::Result {
             .with_icon(eframe::icon_data::from_png_bytes(ICON).expect("icono PNG válido"))
             .with_inner_size([1200.0, 800.0])
             .with_drag_and_drop(true),
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     eframe::run_native(
@@ -75,6 +76,21 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+/// On Windows, use DX12 (with OpenGL as a fallback) instead of letting wgpu try Vulkan: some
+/// Vulkan drivers and layers crash with an access violation (0xC0000005) while the window is
+/// created, intermittently. DX12 is always there on Windows 10/11. `WGPU_BACKEND` still wins.
+fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut opts = eframe::egui_wgpu::WgpuConfiguration::default();
+    if cfg!(windows)
+        && std::env::var_os("WGPU_BACKEND").is_none()
+        && let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut opts.wgpu_setup
+    {
+        setup.instance_descriptor.backends =
+            eframe::wgpu::Backends::DX12 | eframe::wgpu::Backends::GL;
+    }
+    opts
 }
 
 /// Acción que espera confirmación del usuario.

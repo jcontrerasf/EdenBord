@@ -10,7 +10,7 @@ i_overlay = "9.0.0"
 jef = { version = "0.2.0", path = "../jef" }
 kurbo = "0.13"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 thiserror = "2"
 ttf-parser = "0.25"
 usvg = "0.48.1"

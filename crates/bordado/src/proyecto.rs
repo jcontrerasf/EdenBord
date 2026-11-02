@@ -1167,6 +1167,35 @@ mod tests {
     }
 
     #[test]
+    fn long_decimals_survive_save_and_reload() {
+        // Values from a real project that failed the save check: without serde_json's
+        // `float_roundtrip`, "1.5899999999999999" was read back as 1.59.
+        let mut p = Proyecto::default();
+        let mut o = Objeto::new(
+            "c",
+            1,
+            Forma::Contorno {
+                d: BezPath::from_svg("M0,0 L10,0 L10,2 L0,2 Z").unwrap(),
+            },
+            preset_por_nombre("Satín de zona"),
+        );
+        o.order = Some(vec![[1.5899999999999999, 17.020000000000003]]);
+        o.guides = Some(vec![[
+            [13.498999999999999, 20.642],
+            [30.595798974526055, 15.063066931173115],
+        ]]);
+        o.cuts = Some(vec![[
+            [16.42118262985787, 18.047],
+            [15.973702951447645, 19.381],
+        ]]);
+        p.objetos.push(o);
+        let text = p.guardar();
+        let back = Proyecto::leer(&text).unwrap();
+        assert_eq!(back.objetos, p.objetos);
+        assert_eq!(back.guardar(), text);
+    }
+
+    #[test]
     fn guides_and_cuts_are_saved_and_transformed() {
         let mut o = Objeto {
             nombre: "c".into(),
